@@ -1,4 +1,5 @@
 import type { CaseSort, CaseStatus, RiskLevel, SortOrder } from '../api/types';
+import { parseMulti } from './listFilters';
 
 export const PAGE_SIZE = 25;
 
@@ -37,16 +38,6 @@ export const DEFAULT_FILTERS: QueueFilters = {
   order: 'desc',
   page: 1,
 };
-
-function parseMulti<T extends string>(raw: string | null, allowed: T[]): T[] {
-  if (!raw) {
-    return [];
-  }
-  return raw
-    .split(',')
-    .map((v) => v.trim())
-    .filter((v): v is T => (allowed as string[]).includes(v));
-}
 
 export function parseQueueFilters(params: URLSearchParams): QueueFilters {
   const sortRaw = params.get('sort') ?? '';

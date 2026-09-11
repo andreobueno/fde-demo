@@ -21,6 +21,7 @@ import { applyCaseAction } from '../services/caseService.js';
 import { updatePolicy } from '../services/policyService.js';
 import { getPolicy, listPolicyAuditEvents } from '../repo/policy.js';
 import type { Analyst } from '../types.js';
+import { refundRoutes } from './refunds.js';
 
 declare module 'express-serve-static-core' {
   interface Request {
@@ -87,6 +88,7 @@ export function createApp(db: Db): Express {
   });
 
   app.use('/api', resolveAnalyst);
+  app.use('/api/refunds', refundRoutes(db, requirePermission));
 
   app.get('/api/me', (req, res, next) => {
     if (!req.analyst) return next(unauthorized('No analyst context available.'));

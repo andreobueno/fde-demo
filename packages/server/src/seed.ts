@@ -1,6 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { openDb } from './db.js';
 import { schemaSql } from './schema.js';
+import { migrateRefundAudit } from './migrations.js';
+import { seedRefunds } from './seedRefunds.js';
+import { insertAuditEvent } from './repo/audit.js';
 import { computeRisk } from './domain/risk.js';
 import { computeEventHash, GENESIS_HASH } from './domain/audit.js';
 import type { Analyst, CaseStatus, Customer } from './types.js';
@@ -93,13 +96,14 @@ const db = openDb();
 
 function resetSchema() {
   db.exec('PRAGMA foreign_keys = OFF;');
-  for (const t of ['policy_audit_events', 'review_policy', 'audit_events', 'risk_signals', 'cases', 'customers', 'analysts']) {
+  for (const t of ['policy_audit_events', 'review_policy', 'audit_events', 'refunds', 'risk_signals', 'cases', 'customers', 'analysts']) {
     db.exec(`DROP TABLE IF EXISTS ${t};`);
   }
   db.exec('DROP TRIGGER IF EXISTS audit_events_no_update;');
   db.exec('DROP TRIGGER IF EXISTS audit_events_no_delete;');
   db.exec(schemaSql());
   db.exec('PRAGMA foreign_keys = ON;');
+  migrateRefundAudit(db);
 }
 
 const insertAnalyst = db.prepare('INSERT INTO analysts (id, name, role) VALUES (?, ?, ?)');
@@ -113,9 +117,6 @@ const insertCase = db.prepare(`INSERT INTO cases
   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`);
 const insertSignal = db.prepare(`INSERT INTO risk_signals
   (id, case_id, code, title, description, severity, weight) VALUES (?, ?, ?, ?, ?, ?, ?)`);
-const insertEvent = db.prepare(`INSERT INTO audit_events
-  (id, case_id, sequence, actor_id, actor_name, action, from_status, to_status, note, created_at, prev_hash, hash)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
 
 interface EventSpec {
   actor: Analyst;
@@ -274,15 +275,13 @@ function seed() {
           createdAt: eventTime,
         };
         const hash = computeEventHash(prevHash, fields);
-        insertEvent.run(
-          randomUUID(), caseId, sequence, e.actor.id, e.actor.name, e.action,
-          e.fromStatus, e.toStatus, e.note, eventTime, prevHash, hash,
-        );
+        insertAuditEvent(db, { id: randomUUID(), ...fields, actorName: e.actor.name, prevHash, hash });
         prevHash = hash;
       });
     }
   });
   run();
+  seedRefunds(db, now);
 
   const counts = db
     .prepare('SELECT status, COUNT(*) AS n FROM cases GROUP BY status ORDER BY status')

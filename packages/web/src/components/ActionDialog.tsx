@@ -8,7 +8,7 @@ interface ActionDialogProps {
   action: CaseAction;
   approvalNoteRequired: boolean;
   signal: AbortSignal;
-  caseReference: string;
+  subjectLabel: string;
   onClose: () => void;
   onSubmit: (note: string) => Promise<void>;
 }
@@ -24,7 +24,7 @@ export function ActionDialog({
   action,
   approvalNoteRequired,
   signal,
-  caseReference,
+  subjectLabel,
   onClose,
   onSubmit,
 }: ActionDialogProps) {
@@ -101,7 +101,7 @@ export function ActionDialog({
   return (
     <dialog ref={dialogRef} className={styles.dialog}>
       <h2 className={styles.title}>
-        {ACTION_LABELS[action]} case {caseReference}
+        {ACTION_LABELS[action]} {subjectLabel}
       </h2>
       <label className={styles.label} htmlFor="action-note">
         Note {noteIsRequired(action, approvalNoteRequired) ? '(required)' : '(optional)'}
