@@ -16,9 +16,8 @@ import { ActionDialog, CaseMain, NotFoundCase } from './views/CasePage.js';
 import { ErrorPanel, Layout } from './views/Layout.js';
 import { QueuePage, QueueResults } from './views/QueuePage.js';
 
-export const DEFAULT_ANALYST_ID = 'ana-001';
+export const DEFAULT_ANALYST_ID = 'ana-003';
 const ANALYST_COOKIE = 'analyst_id';
-const ANALYSTS_CACHE_MS = 60_000;
 
 const CSP = [
   "default-src 'self'",
@@ -89,18 +88,20 @@ export function createApp({ api, publicDir }: AppOptions) {
   app.disable('x-powered-by');
   app.set('etag', false);
 
-  let analystsCache: { at: number; value: Analyst[] } | null = null;
-  async function loadAnalysts(): Promise<Analyst[]> {
-    if (analystsCache && Date.now() - analystsCache.at < ANALYSTS_CACHE_MS) return analystsCache.value;
-    const value = await api.analysts();
-    analystsCache = { at: Date.now(), value };
-    return value;
-  }
-
-  async function context(req: Request): Promise<RequestContext> {
-    const analysts = await loadAnalysts();
-    const cookieId = parseCookies(req.headers.cookie)[ANALYST_COOKIE];
-    const analystId = cookieId && analysts.some((a) => a.id === cookieId) ? cookieId : DEFAULT_ANALYST_ID;
+  let lastAnalysts: Analyst[] | null = null;
+  async function context(req: Request, recoverIdentity = req.method === 'GET'): Promise<RequestContext> {
+    let analystId = parseCookies(req.headers.cookie)[ANALYST_COOKIE] || DEFAULT_ANALYST_ID;
+    let analysts: Analyst[];
+    try {
+      analysts = await api.analysts(analystId);
+    } catch (err) {
+      if (!recoverIdentity || analystId === DEFAULT_ANALYST_ID || !(err instanceof ApiError) || err.status !== 401) {
+        throw err;
+      }
+      analystId = DEFAULT_ANALYST_ID;
+      analysts = await api.analysts(analystId);
+    }
+    lastAnalysts = analysts;
     return { analysts, analystId, isHx: req.get('HX-Request') === 'true' };
   }
 
@@ -147,7 +148,7 @@ export function createApp({ api, publicDir }: AppOptions) {
 
   app.post('/switch-analyst', async (req, res, next) => {
     try {
-      const analysts = await loadAnalysts();
+      const { analysts } = await context(req, true);
       const body = req.body as Record<string, unknown>;
       const requested = typeof body.analystId === 'string' ? body.analystId : '';
       if (!analysts.some((a) => a.id === requested)) {
@@ -176,22 +177,24 @@ export function createApp({ api, publicDir }: AppOptions) {
       const ctx = await context(req);
       const filters = parseFilters(req.query as Record<string, unknown>);
       if (ctx.isHx) {
-        const result = await api.listCases(filters);
+        const result = await api.listCases(filters, ctx.analystId);
         res.setHeader('HX-Push-Url', queueUrl(filters));
         res.type('html').send(fragment(QueueResults({ filters, result, analysts: ctx.analysts })));
         return;
       }
-      const [stats, result] = await Promise.all([api.stats(), api.listCases(filters)]);
+      const [stats, result] = await Promise.all([
+        api.stats(ctx.analystId), api.listCases(filters, ctx.analystId),
+      ]);
       page(res, ctx, req, 'Case queue', QueuePage({ filters, stats, result, analysts: ctx.analysts }));
     } catch (err) {
       next(err);
     }
   });
 
-  async function loadCaseView(id: string) {
+  async function loadCaseView(id: string, analystId: string) {
     const [kase, explanation] = await Promise.all([
-      api.getCase(id),
-      api.riskExplanation(id).catch(() => null),
+      api.getCase(id, analystId),
+      api.riskExplanation(id, analystId).catch(() => null),
     ]);
     return { kase, explanation, chain: verifyChain(kase.audit) };
   }
@@ -204,7 +207,7 @@ export function createApp({ api, publicDir }: AppOptions) {
     const id = req.params.id;
     try {
       const ctx = await context(req);
-      const view = await loadCaseView(id);
+      const view = await loadCaseView(id, ctx.analystId);
       const done = typeof req.query.done === 'string' && isCaseAction(req.query.done) ? req.query.done : null;
       page(res, ctx, req, caseTitle(view.kase), CaseMain({ ...view, analysts: ctx.analysts }), {
         toast: done ? DONE_MESSAGES[done] : undefined,
@@ -230,11 +233,11 @@ export function createApp({ api, publicDir }: AppOptions) {
         return;
       }
       if (ctx.isHx) {
-        const kase = await api.getCase(id);
+        const kase = await api.getCase(id, ctx.analystId);
         res.type('html').send(fragment(ActionDialog({ kase, action, note: '', error: null })));
         return;
       }
-      const view = await loadCaseView(id);
+      const view = await loadCaseView(id, ctx.analystId);
       const body = [
         CaseMain({ ...view, analysts: ctx.analysts }),
         ActionDialog({ kase: view.kase, action, note: '', error: null }),
@@ -255,7 +258,7 @@ export function createApp({ api, publicDir }: AppOptions) {
       }
       const body = req.body as Record<string, unknown>;
       const rawNote = typeof body.note === 'string' ? body.note : '';
-      const kase = await api.getCase(id);
+      const kase = await api.getCase(id, ctx.analystId);
 
       const respondError = (message: string, status: number) => {
         const dialog = ActionDialog({ kase, action, note: rawNote, error: message });
@@ -265,7 +268,7 @@ export function createApp({ api, publicDir }: AppOptions) {
           res.type('html').send(fragment(dialog));
           return;
         }
-        void loadCaseView(id)
+        void loadCaseView(id, ctx.analystId)
           .then((view) =>
             page(
               res,
@@ -296,7 +299,7 @@ export function createApp({ api, publicDir }: AppOptions) {
       }
 
       if (ctx.isHx) {
-        const view = await loadCaseView(id);
+        const view = await loadCaseView(id, ctx.analystId);
         res.type('html').send(
           fragment(
             createFragmentList([
@@ -338,7 +341,7 @@ export function createApp({ api, publicDir }: AppOptions) {
         ? err.message
         : 'Unexpected error.';
     if (!unreachable) console.error(err);
-    const analysts = analystsCache?.value ?? [{ id: DEFAULT_ANALYST_ID, name: 'Default analyst', role: 'analyst' }];
+    const analysts = lastAnalysts ?? [{ id: DEFAULT_ANALYST_ID, name: 'Default analyst', role: 'analyst' }];
     const ctx: RequestContext = {
       analysts,
       analystId: parseCookies(req.headers.cookie)[ANALYST_COOKIE] ?? DEFAULT_ANALYST_ID,

@@ -33,12 +33,12 @@ export class ApiUnreachableError extends Error {
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
 export interface ApiClient {
-  analysts(): Promise<Analyst[]>;
+  analysts(analystId: string): Promise<Analyst[]>;
   me(analystId: string): Promise<Analyst>;
-  stats(): Promise<CaseStats>;
-  listCases(filters: QueueFilters): Promise<CaseListResponse>;
-  getCase(id: string): Promise<CaseDetail>;
-  riskExplanation(id: string): Promise<RiskExplanation>;
+  stats(analystId: string): Promise<CaseStats>;
+  listCases(filters: QueueFilters, analystId: string): Promise<CaseListResponse>;
+  getCase(id: string, analystId: string): Promise<CaseDetail>;
+  riskExplanation(id: string, analystId: string): Promise<RiskExplanation>;
   performAction(
     id: string,
     analystId: string,
@@ -58,10 +58,17 @@ function isApiErrorBody(value: unknown): value is ApiErrorBody {
 }
 
 export function createApiClient(baseUrl: string, fetchImpl: FetchLike = fetch): ApiClient {
-  async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  async function request<T>(
+    path: string,
+    analystId: string,
+    init: Omit<RequestInit, 'headers'> & { headers?: Record<string, string> } = {},
+  ): Promise<T> {
     let res: Response;
     try {
-      res = await fetchImpl(`${baseUrl}${path}`, init);
+      res = await fetchImpl(`${baseUrl}${path}`, {
+        ...init,
+        headers: { ...init.headers, 'x-analyst-id': analystId },
+      });
     } catch (cause) {
       throw new ApiUnreachableError(cause);
     }
@@ -84,20 +91,20 @@ export function createApiClient(baseUrl: string, fetchImpl: FetchLike = fetch): 
   }
 
   return {
-    analysts: () => request<Analyst[]>('/api/analysts'),
-    me: (analystId) => request<Analyst>('/api/me', { headers: { 'x-analyst-id': analystId } }),
-    stats: () => request<CaseStats>('/api/cases/stats'),
-    listCases: (filters) => {
+    analysts: (analystId) => request<Analyst[]>('/api/analysts', analystId),
+    me: (analystId) => request<Analyst>('/api/me', analystId),
+    stats: (analystId) => request<CaseStats>('/api/cases/stats', analystId),
+    listCases: (filters, analystId) => {
       const qs = filtersToApiQuery(filters).toString();
-      return request<CaseListResponse>(`/api/cases${qs ? `?${qs}` : ''}`);
+      return request<CaseListResponse>(`/api/cases${qs ? `?${qs}` : ''}`, analystId);
     },
-    getCase: (id) => request<CaseDetail>(`/api/cases/${encodeURIComponent(id)}`),
-    riskExplanation: (id) =>
-      request<RiskExplanation>(`/api/cases/${encodeURIComponent(id)}/risk-explanation`),
+    getCase: (id, analystId) => request<CaseDetail>(`/api/cases/${encodeURIComponent(id)}`, analystId),
+    riskExplanation: (id, analystId) =>
+      request<RiskExplanation>(`/api/cases/${encodeURIComponent(id)}/risk-explanation`, analystId),
     performAction: (id, analystId, action, note) =>
-      request<ActionResponse>(`/api/cases/${encodeURIComponent(id)}/actions`, {
+      request<ActionResponse>(`/api/cases/${encodeURIComponent(id)}/actions`, analystId, {
         method: 'POST',
-        headers: { 'content-type': 'application/json', 'x-analyst-id': analystId },
+        headers: { 'content-type': 'application/json' },
         body: JSON.stringify(note === undefined ? { action } : { action, note }),
       }),
   };

@@ -26,12 +26,15 @@ Checks: `npm run typecheck:web-c`, `npm run lint:web-c`, `npm run test:web-c`, `
     canonical filter URL, so filter/search/sort/pagination state lives in the URL and is shareable.
   - `GET /cases/:id/actions/:action` returns the confirm `<dialog>` fragment (or the case page with the
     dialog inline when JS is off).
-  - `POST /cases/:id/actions/:action` validates the note client-side (same rules as the server), forwards
+  - `POST /cases/:id/actions/:action` makes a preliminary note check (current policy is enforced by the API), forwards
     to the API with `x-analyst-id`, and on success swaps `#case-main` plus out-of-band swaps that close the
     dialog and show a toast. Validation/403/409 messages from the API are re-rendered inside the dialog
     (`HX-Retarget`). Without JS the POST redirects back to the case with `?done=<action>`.
 - Analyst identity is an `analyst_id` cookie (HttpOnly, SameSite=Lax) set by `POST /switch-analyst`; the
   header select submits on change via htmx (`HX-Refresh`) or via the visible "Switch" button without JS.
+  Every API call forwards this identity, including reads and identity-list bootstrap. New visitors
+  use `ana-003` (analyst). An invalid persisted ID can recover through a GET or the identity switcher;
+  case mutations with an invalid ID fail without retrying as another user. This remains demo impersonation.
 - Audit chain verification is computed in Node (`src/lib/audit.ts`, mirrors `packages/server/src/domain/audit.ts`).
 - Security headers: a CSP of `default-src 'self'; script-src 'self'; style-src 'self'; ...` (no inline
   scripts or styles — the risk meters use `<meter>` instead of inline widths), `X-Content-Type-Options`,
@@ -71,7 +74,7 @@ captured from the seeded DB (`test/fixtures-audit.json`).
 - Interactivity is limited to what htmx attributes express; anything richer (live counters, drag/drop,
   client-side sorting) would need bespoke JS, eroding the "no client complexity" benefit.
 - The full page is rendered from scratch on each request, so the analysts list is fetched per request
-  (cached 60 s) and the case page issues two API calls (`case` + `risk-explanation`) in parallel.
+  and the case page issues two API calls (`case` + `risk-explanation`) in parallel.
 - Out-of-band swaps (`hx-swap-oob`) and `HX-Retarget` are powerful but implicit; the coupling between
   route responses and element ids (`#case-main`, `#dialog-slot`, `#toast`) is a convention, not typed.
 - No hydration means React features like state/effects are unavailable; components are pure functions of

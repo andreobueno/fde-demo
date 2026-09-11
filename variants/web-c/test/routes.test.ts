@@ -98,6 +98,10 @@ function buildApp(opts: StubOptions = {}) {
   const fetchStub: FetchLike = async (url, init) => {
     calls.push({ url, init });
     if (opts.unreachable) throw new TypeError('fetch failed');
+    const analystId = new Headers(init?.headers).get('x-analyst-id');
+    if (!analysts.some((analyst) => analyst.id === analystId)) {
+      return json({ error: { code: 'UNAUTHORIZED', message: 'Unknown analyst context.' } }, 401);
+    }
     const { pathname } = new URL(url);
     if (pathname === '/api/analysts') return json(analysts);
     if (pathname === '/api/cases/stats') return json(stats);
@@ -114,6 +118,29 @@ function buildApp(opts: StubOptions = {}) {
 }
 
 describe('GET /', () => {
+  it.each(['ana-001', 'ana-003'])('forwards selected identity %s on every API read', async (analystId) => {
+    const { app, calls } = buildApp();
+    for (const path of ['/', '/cases/case-006', '/cases/case-006/actions/reject']) {
+      await request(app).get(path).set('Cookie', `analyst_id=${analystId}`).expect(200);
+    }
+    expect(calls.length).toBeGreaterThan(0);
+    expect(calls.every((call) => new Headers(call.init?.headers).get('x-analyst-id') === analystId)).toBe(true);
+    expect(calls.some((call) => call.url.endsWith('/api/analysts'))).toBe(true);
+    expect(calls.some((call) => call.url.endsWith('/api/cases/stats'))).toBe(true);
+    expect(calls.some((call) => call.url.endsWith('/risk-explanation'))).toBe(true);
+  });
+
+  it('uses an unprivileged default and recovers unknown cookies on reads', async () => {
+    const { app, calls } = buildApp();
+    await request(app).get('/').expect(200);
+    expect(calls.every((call) => new Headers(call.init?.headers).get('x-analyst-id') === 'ana-003')).toBe(true);
+    calls.length = 0;
+    const recovered = await request(app).get('/cases/case-006').set('Cookie', 'analyst_id=deleted').expect(200);
+    expect(recovered.text).toContain('value="ana-003" selected=""');
+    expect(new Headers(calls[0]?.init?.headers).get('x-analyst-id')).toBe('deleted');
+    expect(calls.slice(1).every((call) => new Headers(call.init?.headers).get('x-analyst-id') === 'ana-003')).toBe(true);
+  });
+
   it('renders queue rows, stats and filter state from the API', async () => {
     const { app, calls } = buildApp();
     const res = await request(app).get('/?riskLevel=high&status=in_review&q=priya');
@@ -185,6 +212,16 @@ describe('GET /cases/:id', () => {
 });
 
 describe('POST /cases/:id/actions/:action', () => {
+  it('never retries a case mutation under a fallback identity', async () => {
+    const { app, calls } = buildApp();
+    await request(app).post('/cases/case-006/actions/escalate')
+      .set('Cookie', 'analyst_id=deleted').type('form')
+      .send({ note: 'Escalation requires further review.' }).expect(401);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.url).toBe('http://api.test/api/analysts');
+    expect(new Headers(calls[0]?.init?.headers).get('x-analyst-id')).toBe('deleted');
+  });
+
   it('forwards the note and analyst header, then renders the refreshed case and toast', async () => {
     const { app, calls } = buildApp();
     const res = await request(app)
@@ -249,6 +286,14 @@ describe('POST /cases/:id/actions/:action', () => {
 });
 
 describe('POST /switch-analyst', () => {
+  it('lets a user replace an invalid persisted identity explicitly', async () => {
+    const { app } = buildApp();
+    const response = await request(app).post('/switch-analyst')
+      .set('Cookie', 'analyst_id=deleted').type('form')
+      .send({ analystId: 'ana-001', returnTo: '/' }).expect(303);
+    expect(response.headers['set-cookie']?.[0]).toContain('analyst_id=ana-001');
+  });
+
   it('sets an HttpOnly SameSite=Lax cookie and redirects back', async () => {
     const { app } = buildApp();
     const res = await request(app).post('/switch-analyst').type('form').send({ analystId: 'ana-003', returnTo: '/cases/case-006' });
