@@ -165,8 +165,6 @@ export function createApp(db: Db): Express {
     const caseId = String(req.params.id);
     const kase = getCase(db, caseId);
     if (!kase) return next(notFound(`Case '${caseId}' not found.`));
-    const customer = getCustomer(db, kase.customerId);
-    if (!customer) return next(notFound(`Customer '${kase.customerId}' not found.`));
     res.json(explainRisk(kase, listSignals(db, kase.id), getCaseRiskThresholds(db, kase.id)));
   });
 

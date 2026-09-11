@@ -59,7 +59,7 @@ interface RiskExplanation {
   - → `{ items: KycCase[]; total: number; page: number; pageSize: number }`
 - `GET /api/cases/:id` → `KycCase & { customer: Customer; signals: RiskSignal[]; audit: AuditEvent[]; allowedActions: CaseAction[]; approvalNoteRequired: boolean }`
 - `GET /api/cases/:id/risk-explanation` → `RiskExplanation`
-  - Uses the persisted case `riskScore`/`riskLevel` and recorded `risk_signals`, matching case details. Reads do not evaluate current customer fields, use the current clock, or mutate the case/signals.
+  - Uses the persisted case `riskScore`/`riskLevel` and recorded `risk_signals`, matching case details. Closed cases retain the assessment used for their decision. Reads do not evaluate current customer fields, use the current clock, or mutate the case/signals.
   - Every factor's `signalId` is the stored signal's `id`. Its code, title, description, severity and weight are returned as recorded; descriptions provide the supporting evidence. No source documents, evidence values, transaction velocity data or LLM text are generated.
   - `factors` are sorted by weight descending, then code ascending, then signal ID ascending. String ties use deterministic, case-sensitive JavaScript string comparison (`<`/`>`), independent of locale. `primaryDriver` is the first factor in this order, or `null` when empty.
   - `rawScore` is the sum of all recorded signal weights. `scoreCapped` is `rawScore > 100`; scores from the risk engine are capped at 100. Neither field overwrites the persisted score or level.

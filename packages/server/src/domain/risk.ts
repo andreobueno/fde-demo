@@ -106,15 +106,14 @@ export function computeRisk(
   }
 
   if (customer.idDocumentExpiresAt) {
-    const daysToExpiry = Math.floor(
-      (new Date(customer.idDocumentExpiresAt).getTime() - now.getTime()) / DAY_MS,
-    );
-    if (daysToExpiry < DOCUMENT_EXPIRING_DAYS) {
+    const deltaDays =
+      (new Date(customer.idDocumentExpiresAt).getTime() - now.getTime()) / DAY_MS;
+    if (deltaDays < DOCUMENT_EXPIRING_DAYS) {
       fire(
         'DOCUMENT_EXPIRING',
-        daysToExpiry < 0
-          ? `ID document expired ${-daysToExpiry} day(s) ago.`
-          : `ID document expires in ${daysToExpiry} day(s) (< ${DOCUMENT_EXPIRING_DAYS} days).`,
+        deltaDays < 0
+          ? `ID document expired ${Math.floor(-deltaDays)} day(s) ago.`
+          : `ID document expires in ${Math.floor(deltaDays)} day(s) (< ${DOCUMENT_EXPIRING_DAYS} days).`,
       );
     }
   }

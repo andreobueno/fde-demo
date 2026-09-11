@@ -223,6 +223,26 @@ describe('explainRisk', () => {
     expect(e.primaryDriver).toEqual(e.factors[0]);
   });
 
+  it('contributionPct sums to 100 even when the score is clamped', () => {
+    const evaluation = computeRisk(
+      baseCustomer({ sanctionsHit: true, pepFlag: true, idDocumentVerified: false, addressVerified: false }),
+      NOW,
+    );
+    const e = explainRisk(
+      { id: 'case-z', riskScore: evaluation.score, riskLevel: evaluation.level },
+      evaluation.signals.map((signal, index) => ({ ...signal, id: `signal-${index}`, caseId: 'case-z' })),
+    );
+    expect(e.riskScore).toBe(100);
+    expect(e.factors.reduce((sum, f) => sum + f.contributionPct, 0)).toBe(100);
+  });
+
+  it('reports whole elapsed days for expired documents', () => {
+    const r = computeRisk(baseCustomer({ idDocumentExpiresAt: '2026-05-31T12:00:00Z' }), NOW);
+    expect(r.signals.find((s) => s.code === 'DOCUMENT_EXPIRING')?.description).toBe(
+      'ID document expired 0 day(s) ago.',
+    );
+  });
+
   it('is deterministic for repeated and reordered input without mutating stored evidence', () => {
     const input = Object.freeze(signals.map((s) => Object.freeze({ ...s })));
     const first = explainRisk(kase, input);
