@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   ApiError,
   apiRequest,
+  authenticateAccessToken,
   getAnalysts,
   getAudit,
   getCase,
@@ -19,6 +20,7 @@ import {
 } from './client';
 import type { Policy, PolicyAuditEvent } from './types';
 import { DEFAULT_FILTERS, queueFiltersToQuery } from '../lib/queueFilters';
+import { clearIdentity } from './identity';
 
 const fetchMock = vi.fn<typeof fetch>();
 const policy: Policy = {
@@ -29,15 +31,24 @@ const policy: Policy = {
 };
 const update = { version: 1, requireApprovalNote: false, reason: '  Reviewed approval requirements  ' };
 
-beforeEach(() => {
+const token = 't'.repeat(43);
+
+async function signIn(id: string) {
+  fetchMock.mockResolvedValueOnce(Response.json({ id, name: id, role: 'analyst', permissions: [] }));
+  await authenticateAccessToken(token);
+  fetchMock.mockClear();
+}
+
+beforeEach(async () => {
   fetchMock.mockReset();
   fetchMock.mockImplementation(async () => Response.json({}));
   vi.stubGlobal('fetch', fetchMock);
+  await signIn('ana-003');
 });
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => { clearIdentity(); vi.unstubAllGlobals(); });
 
-describe('explicit demo identity on every API request', () => {
+describe('authenticated identity on every API request', () => {
   const endpoints: Array<{
     path: string;
     method: string;
@@ -61,13 +72,16 @@ describe('explicit demo identity on every API request', () => {
 
   it.each(endpoints)('$method $path uses the supplied identity and cancellation signal', async ({ request, path, method }) => {
     for (const id of ['ana-006', 'ana-003']) {
+      await signIn(id);
       const controller = new AbortController();
       await request(id, controller.signal);
       expect(fetchMock).toHaveBeenLastCalledWith(path, {
         method,
-        headers: { 'content-type': 'application/json', 'x-analyst-id': id },
+        headers: { 'content-type': 'application/json', Authorization: `Bearer ${token}`, 'x-analyst-id': id },
         body: method === 'GET' ? null : expect.any(String),
-        signal: controller.signal,
+        signal: expect.any(AbortSignal),
+        credentials: 'omit',
+        redirect: 'error',
       });
     }
   });
@@ -79,7 +93,7 @@ describe('explicit demo identity on every API request', () => {
 
   it('does not retry unauthorized requests as another identity', async () => {
     fetchMock.mockResolvedValue(Response.json({ error: { code: 'UNAUTHORIZED', message: 'Unknown analyst' } }, { status: 401 }));
-    await expect(getAnalysts('missing-id')).rejects.toMatchObject({ status: 401 });
+    await expect(getAnalysts('ana-003')).rejects.toMatchObject({ status: 401 });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
@@ -94,6 +108,7 @@ describe('explicit demo identity on every API request', () => {
   });
 
   it('ignores a late response after identity cancellation even if transport completes', async () => {
+    await signIn('ana-006');
     const controller = new AbortController();
     let respond: (response: Response) => void = () => { throw new Error('Request has not started'); };
     fetchMock.mockImplementation(() => new Promise((resolve) => { respond = resolve; }));
@@ -106,9 +121,11 @@ describe('explicit demo identity on every API request', () => {
 
 describe('RBAC and policy contracts', () => {
   it('preserves the database identity role and permissions', async () => {
+    await signIn('ana-006');
     const me = { id: 'ana-006', name: 'Sofia Chen', role: 'compliance_manager', permissions: ['policy:write'] };
     fetchMock.mockResolvedValueOnce(Response.json(me));
     await expect(getMe('ana-006')).resolves.toEqual(me);
+    await signIn('ana-003');
     fetchMock.mockResolvedValueOnce(Response.json([me]));
     await expect(getAnalysts('ana-003')).resolves.toEqual([me]);
   });
@@ -123,6 +140,7 @@ describe('RBAC and policy contracts', () => {
   });
 
   it('sends only the strict versioned policy body with a trimmed reason', async () => {
+    await signIn('ana-006');
     fetchMock.mockResolvedValueOnce(Response.json(policy));
     await expect(updatePolicy(update, 'ana-006')).resolves.toEqual(policy);
     expect(fetchMock).toHaveBeenCalledWith('/api/policy', expect.objectContaining({
@@ -170,6 +188,7 @@ describe('RBAC and policy contracts', () => {
     expect(fetchMock).toHaveBeenLastCalledWith('/api/cases/case-001/actions', expect.objectContaining({
       body: JSON.stringify({ action: 'start_review' }),
     }));
+    await signIn('ana-006');
     await postCaseAction('case-001', 'reject', '  Reviewed evidence  ', 'ana-006');
     expect(fetchMock).toHaveBeenLastCalledWith('/api/cases/case-001/actions', expect.objectContaining({
       body: JSON.stringify({ action: 'reject', note: 'Reviewed evidence' }),

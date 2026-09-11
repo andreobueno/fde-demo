@@ -1,38 +1,28 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, useContext, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import type { ReactNode } from 'react';
 import { getAnalysts } from '../api/client';
-import type { Analyst } from '../api/types';
-
-const STORAGE_KEY = 'kyc.analystId';
-export const DEFAULT_ANALYST_ID = 'ana-003';
+import type { Analyst, CurrentAnalyst } from '../api/types';
+import { clearIdentity, getIdentity, subscribeIdentity } from '../api/identity';
 
 interface AnalystContextValue {
   analystId: string;
-  setAnalystId: (id: string) => void;
+  analyst: CurrentAnalyst | null;
+  signOut: () => void;
   analysts: Analyst[];
   identitySignal: AbortSignal;
 }
 
 const AnalystContext = createContext<AnalystContextValue | null>(null);
 
-function loadStoredAnalystId(): string {
-  try {
-    const stored = window.localStorage.getItem(STORAGE_KEY);
-    return stored && stored.length > 0 ? stored : DEFAULT_ANALYST_ID;
-  } catch {
-    return DEFAULT_ANALYST_ID;
-  }
-}
-
 export function AnalystProvider({ children }: { children: ReactNode }) {
-  const [identity, setIdentity] = useState(() => ({
-    id: loadStoredAnalystId(),
-    controller: new AbortController(),
-  }));
-  const analystId = identity.id;
+  const identity = useSyncExternalStore(subscribeIdentity, getIdentity, () => null);
+  const analystId = identity?.analyst.id ?? '';
+  const signedOutSignal = useMemo(() => new AbortController().signal, []);
   const [analysts, setAnalysts] = useState<Analyst[]>([]);
 
   useEffect(() => {
+    setAnalysts([]);
+    if (!identity) return;
     const controller = new AbortController();
     getAnalysts(analystId, controller.signal)
       .then((list) => {
@@ -44,24 +34,14 @@ export function AnalystProvider({ children }: { children: ReactNode }) {
     return () => {
       controller.abort();
     };
-  }, [analystId]);
-
-  const setAnalystId = useCallback((id: string) => {
-    if (id === identity.id) {
-      return;
-    }
-    identity.controller.abort();
-    setIdentity({ id, controller: new AbortController() });
-    try {
-      window.localStorage.setItem(STORAGE_KEY, id);
-    } catch {
-      // storage unavailable; session-only id
-    }
-  }, [identity]);
+  }, [analystId, identity]);
 
   const value = useMemo(
-    () => ({ analystId, setAnalystId, analysts, identitySignal: identity.controller.signal }),
-    [analystId, setAnalystId, analysts, identity],
+    () => ({
+      analystId, analyst: identity?.analyst ?? null, signOut: clearIdentity,
+      analysts: identity ? analysts : [], identitySignal: identity?.signal ?? signedOutSignal,
+    }),
+    [analystId, analysts, identity, signedOutSignal],
   );
 
   return <AnalystContext.Provider value={value}>{children}</AnalystContext.Provider>;
