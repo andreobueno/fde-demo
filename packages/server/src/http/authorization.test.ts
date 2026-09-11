@@ -11,6 +11,16 @@ const ACTORS = {
 } as const;
 type Role = keyof typeof ACTORS;
 const ROLES: Role[] = ['analyst', 'senior_analyst', 'compliance_manager'];
+const READ_REVIEW_PERMISSIONS = [
+  'cases:read', 'audit:read', 'cases:review', 'cases:escalate', 'policy:read',
+];
+const EXPECTED_PERMISSIONS: Record<Role, string[]> = {
+  analyst: READ_REVIEW_PERMISSIONS,
+  senior_analyst: [...READ_REVIEW_PERMISSIONS, 'cases:decide_low_medium'],
+  compliance_manager: [
+    ...READ_REVIEW_PERMISSIONS, 'cases:decide_low_medium', 'cases:decide_high', 'policy:manage',
+  ],
+};
 const RISKS: RiskLevel[] = ['low', 'medium', 'high'];
 const STATUSES: CaseStatus[] = ['pending', 'in_review', 'escalated', 'approved', 'rejected'];
 const ACTIONS: CaseAction[] = ['start_review', 'approve', 'reject', 'escalate'];
@@ -198,7 +208,7 @@ describe('identity at every sensitive HTTP endpoint', () => {
       }
     }
     const me = await request(app).get('/api/me').set('x-analyst-id', ACTORS[role].id).expect(200);
-    expect(me.body).toEqual(ACTORS[role]);
+    expect(me.body).toEqual({ ...ACTORS[role], permissions: EXPECTED_PERMISSIONS[role] });
   });
 
   it('resolves promotions and demotions from the database on each request', async () => {
@@ -207,7 +217,9 @@ describe('identity at every sensitive HTTP endpoint', () => {
       db.prepare('UPDATE analysts SET role = ?, name = ? WHERE id = ?')
         .run(role, `Fictional ${role}`, identity);
       const me = await request(app).get('/api/me').set('x-analyst-id', identity).expect(200);
-      expect(me.body).toEqual({ id: identity, name: `Fictional ${role}`, role });
+      expect(me.body).toEqual({
+        id: identity, name: `Fictional ${role}`, role, permissions: EXPECTED_PERMISSIONS[role],
+      });
       for (const risk of ['low', 'high'] as const) {
         const id = addCase('pending', risk);
         const detail = await request(app).get(`/api/cases/${id}`).set('x-analyst-id', identity).expect(200);

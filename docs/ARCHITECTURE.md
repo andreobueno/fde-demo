@@ -16,10 +16,12 @@ flowchart LR
 Example: `POST /api/cases/:id/actions`
 
 1. `http/app.ts` parses the body with `actionBodySchema` (zod) and resolves the analyst from `x-analyst-id` (401 if missing/unknown).
-2. `services/caseService.applyCaseAction(db, caseId, actor, action, note)` opens a transaction.
-3. Inside it, `domain/transitions.validateAction` decides allow/deny and the target status — no I/O.
+2. `services/caseService.applyCaseAction(db, caseId, actor, action, note)` opens an immediate transaction, reloads the actor's stored identity and role, and reads the current policy.
+3. Inside it, `domain/transitions.validateAction` combines legal transitions, role/risk permissions and policy note requirements — no I/O.
 4. `repo/cases.updateCaseStatus`, then `domain/audit.computeEventHash` over the previous event's hash, then `repo/audit.insertAuditEvent`.
-5. The transaction commits; the service returns `{ case, audit, allowedActions }`; the HTTP layer serialises it.
+5. The transaction commits; the service returns `{ case, audit, allowedActions, approvalNoteRequired }`; the HTTP layer serialises it.
+
+`PUT /api/policy` requires `policy:manage`, a change reason and the current version. `policyService` reloads the actor, validates permission/version, and commits the updated setting with a hash-linked before/after audit event in one immediate transaction. High-risk decision permissions and note requirements are fixed in the authorization domain and cannot be relaxed by this setting.
 
 ## Module responsibilities
 
@@ -48,7 +50,7 @@ Services are where impurity lives: they read current state, call the pure functi
 
 ## Transaction boundaries
 
-Every mutating use case is one `db.transaction(() => ...)()` in the service layer. For a case action the transaction covers: read case → validate → update case row → read last audit event → insert new audit event → re-read case. better-sqlite3 transactions are synchronous, so there is no interleaving within a transaction; two concurrent actions on the same case are serialised and the second is validated against the committed state (and gets `409 INVALID_TRANSITION` if the transition is no longer valid). Reads are single statements and do not open explicit transactions.
+Every mutating use case uses `db.transaction(() => ...).immediate()` in the service layer. Case actions cover: reload actor → read case/policy → validate → update case → append audit → re-read case. Writes are serialized and the next action is checked against committed state (`409 INVALID_TRANSITION` when no longer legal). Policy writes additionally enforce the client's version (`409 POLICY_CONFLICT`). Case requests do not yet include a client version. Reads do not open explicit transactions.
 
 The rule: if a use case writes more than one row, or writes and then reads back, it belongs in a service function wrapped in a transaction. Repos never open transactions.
 
@@ -63,10 +65,11 @@ All errors are `ApiError` instances converted by the final Express error handler
 | Status | Code | Source |
 | --- | --- | --- |
 | 400 | `VALIDATION_ERROR` | zod parse failure (details contains issues) or domain note rules |
-| 401 | `UNAUTHORIZED` | missing/unknown `x-analyst-id` on a mutation |
+| 401 | `UNAUTHORIZED` | missing/unknown `x-analyst-id` on any sensitive API route |
 | 403 | `FORBIDDEN` | role not allowed for the transition |
 | 404 | `NOT_FOUND` | unknown case or route |
 | 409 | `INVALID_TRANSITION` | action not valid from the current status |
+| 409 | `POLICY_CONFLICT` | supplied policy version is stale |
 | 500 | `INTERNAL` | anything unexpected; message is generic, stack is logged server-side |
 
 Domain functions return `{ ok: false, error: { code, message } }` rather than throwing; the service maps the code to a status. This keeps the domain free of HTTP concepts.
@@ -96,6 +99,6 @@ packages/web/
 6. Implement `http/app.ts` as `createApp(db)` so tests can instantiate it with `openDb(':memory:')`. Validate every body and query string with zod at the edge.
 7. Write `seed.ts` with a fixed PRNG seed and fictional data; make it idempotent (drop + recreate). Log summary counts at the end.
 8. Tests at three levels: domain (pure), service (in-memory SQLite), HTTP (supertest against `createApp`). Keep them in `*.test.ts` beside the code.
-9. Keep the identity middleware and error handler as-is until the shared platform pieces (SSO, policy engine, Postgres, audit ledger — see `ASSUMPTIONS.md`) exist; then replace them once and share across apps.
+9. Replace demo identity with validated SSO before handling sensitive data; reuse the server permission/service boundaries and error envelope. See `ASSUMPTIONS.md` and `SECURITY_REVIEW.md` for the remaining platform work.
 
 **Reuse candidates for a shared package** once a second app exists: `ApiError` + error handler, identity middleware, hash-chain audit module, `openDb`/schema bootstrap, zod query-string helpers, pagination shape `{ items, total, page, pageSize }`.

@@ -53,7 +53,7 @@ Quick smoke test after `npm run dev:server`:
 
 ```bash
 curl -s localhost:4000/api/health
-curl -s 'localhost:4000/api/cases?riskLevel=high&pageSize=3'
+curl -s 'localhost:4000/api/cases?riskLevel=high&pageSize=3' -H 'x-analyst-id: ana-003'
 curl -s -X POST localhost:4000/api/cases/<id>/actions \
   -H 'content-type: application/json' -H 'x-analyst-id: ana-003' \
   -d '{"action":"start_review"}'
@@ -81,17 +81,18 @@ stateDiagram-v2
     in_review --> approved: approve
     in_review --> rejected: reject
     in_review --> escalated: escalate
-    escalated --> approved: approve (senior_analyst only)
-    escalated --> rejected: reject (senior_analyst only)
+    escalated --> approved: approve (authorized decision-maker)
+    escalated --> rejected: reject (authorized decision-maker)
     approved --> [*]
     rejected --> [*]
 ```
 
 Rules enforced by the domain layer (`packages/server/src/domain/transitions.ts`):
 
-- `reject` and `escalate` require a `note` of 10–1000 characters; `approve` accepts an optional note (≤1000).
-- Approving a `high` risk case from `pending` or `in_review` requires a note.
-- Only `senior_analyst` can resolve an `escalated` case.
+- `reject` and `escalate` require a trimmed note of 10–1000 characters.
+- Every high-risk approval requires a 10–1000 character note, including escalated cases.
+- Low/medium approvals require the same note by default; a compliance manager can change this through the Policy page. Optional notes remain capped at 1000 characters.
+- Decisions from `pending`, `in_review`, and `escalated` use the role/risk matrix below. Terminal cases cannot be changed.
 - Errors: `409 INVALID_TRANSITION`, `400 VALIDATION_ERROR`, `403 FORBIDDEN`, `401 UNAUTHORIZED`, `404 NOT_FOUND`.
 
 ## Risk scoring model
@@ -121,11 +122,17 @@ Every state change appends one `audit_events` row per case with a monotonically 
 hash = sha256(prevHash + canonicalJson({ action, actorId, caseId, createdAt, fromStatus, note, sequence, toStatus }))
 ```
 
-with keys in that fixed order. Altering or removing any event breaks every subsequent hash, which `verifyChain()` (`packages/server/src/domain/audit.ts`) detects. SQLite triggers additionally reject `UPDATE`/`DELETE` on `audit_events`. The write of the case row and the audit row happens in one transaction. This is tamper-evident, not tamper-proof: the chain lives in the same database as the data (see `docs/ASSUMPTIONS.md`).
+with keys in that fixed order. Each event records server-derived actor ID/name, action, case ID, timestamp, previous/new status and the trimmed note. SQLite triggers reject `UPDATE`/`DELETE`; recursive triggers also prevent `INSERT OR REPLACE` from overwriting history. There are no application routes to insert arbitrary events, edit them, or delete them, including for managers. Case changes and audit appends commit or roll back together.
+
+Hash verification detects altered hashed fields and broken links. It cannot detect deletion of the chain tail or a privileged rewrite of the whole database, and the legacy case hash does not cover actor display names. Policy changes have a separate hash chain covering actor ID/name/role, reason and complete previous/new policy snapshots. Both chains remain in the operational database; external immutable storage and chain anchoring are production requirements.
 
 ## Identity model
 
-There is no login. Every request may carry `x-analyst-id: <analystId>`; mutations without a known id get `401`, reads default to `ana-001`. Seeded analysts:
+There is no login. The **Demo identity** selector sends `x-analyst-id` on every API request. All sensitive reads and writes require a known ID (`401` for missing/unknown); only health is anonymous. The server loads roles from the database, never from request body or role headers, and re-resolves the actor within mutation transactions. New UI visitors start as `ana-003`, an analyst. Switching identity discards stale dialogs and data and aborts pending client requests; a request already committed server-side retains its original actor.
+
+**This is enforced authorization with simulated identity, not production authentication.** Anyone able to call the API can choose a seeded manager ID. Before handling sensitive data, replace the selector/header with server-validated SSO sessions and provision roles through a controlled process.
+
+Seeded identities:
 
 | Id | Name | Role |
 | --- | --- | --- |
@@ -134,8 +141,28 @@ There is no login. Every request may carry `x-analyst-id: <analystId>`; mutation
 | `ana-003` | Grete Lindholm | `analyst` |
 | `ana-004` | Kwame Osei | `analyst` |
 | `ana-005` | Ines Morales | `analyst` |
+| `ana-006` | Sofia Chen | `compliance_manager` |
 
-`GET /api/me` echoes the resolved analyst; `GET /api/analysts` lists all of them. Only senior analysts can resolve escalated cases.
+`GET /api/me` returns the resolved identity and permissions; `GET /api/analysts` lists demo identities.
+
+| Permission | Analyst | Senior analyst | Compliance manager |
+| --- | --- | --- | --- |
+| Read cases, risk information, audit history and policy | Yes | Yes | Yes |
+| Start review / escalate | Yes | Yes | Yes |
+| Approve/reject low or medium risk | No | Yes | Yes |
+| Approve/reject high risk | No | No | Yes |
+| Change policy | No | No | Yes |
+| Modify/delete audit history | No | No | No |
+
+The API returns `allowedActions` from the same role/risk/state rules used to authorize mutations. Denied requests do not change case state or decision history. All identities share the case queue; tenant, assignment and field-level restrictions are not implemented.
+
+## Policy and existing databases
+
+The Policy page controls whether low/medium approvals need a justification. Managers must provide a change reason and the current version; concurrent edits return `409 POLICY_CONFLICT`. Policy cannot relax high-risk role or note requirements. Every accepted policy update is audited in the same transaction.
+
+Startup upgrades the old analyst-role constraint and creates the default policy without rewriting existing identities, cases or audit rows. Back up the database before upgrades. Existing databases do not automatically gain a manager account: provision one through trusted administrative access or use a separate freshly seeded demo database. `npm run seed` remains a **destructive demo reset**, including policy history; never use it to migrate retained records.
+
+See [authorization and audit hardening](docs/SECURITY_REVIEW.md) for the before/after assessment, test coverage and remaining production work.
 
 ## Further reading
 

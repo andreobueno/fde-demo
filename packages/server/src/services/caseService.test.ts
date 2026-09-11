@@ -1,10 +1,11 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { openDb, type Db } from '../db.js';
 import { applyCaseAction } from './caseService.js';
 import { computeEventHash, GENESIS_HASH, verifyChain } from '../domain/audit.js';
 import { listAuditEvents } from '../repo/audit.js';
 import type { Analyst, CaseStatus, RiskLevel } from '../types.js';
 import { ApiError } from '../errors.js';
+import { getCase } from '../repo/cases.js';
 
 const SENIOR: Analyst = { id: 'ana-001', name: 'Senior One', role: 'senior_analyst' };
 const ANALYST: Analyst = { id: 'ana-003', name: 'Analyst Three', role: 'analyst' };
@@ -48,6 +49,8 @@ beforeEach(() => {
   }
 });
 
+afterEach(() => db.close());
+
 describe('applyCaseAction', () => {
   it('approves a pending case: status, assignment, audit sequence 2, valid chain', () => {
     insertCase('c1', 'pending');
@@ -69,7 +72,7 @@ describe('applyCaseAction', () => {
     insertCase('c2', 'pending');
     const res = applyCaseAction(db, 'c2', ANALYST, 'start_review', undefined);
     expect(res.case.status).toBe('in_review');
-    expect(res.allowedActions).toEqual(['approve', 'reject', 'escalate']);
+    expect(res.allowedActions).toEqual(['escalate']);
     expect(verifyChain(res.audit)).toBe(true);
   });
 
@@ -118,5 +121,66 @@ describe('applyCaseAction', () => {
     expect(() =>
       db.prepare("DELETE FROM audit_events WHERE case_id = 'c5b'").run(),
     ).toThrowError(/append-only/);
+  });
+
+  it('rolls back case state, assignment and timestamp when audit insertion fails', () => {
+    insertCase('rollback', 'pending');
+    const before = getCase(db, 'rollback');
+    const events = listAuditEvents(db, 'rollback');
+    db.exec(`CREATE TRIGGER fail_audit BEFORE INSERT ON audit_events
+      BEGIN SELECT RAISE(ABORT, 'simulated audit outage'); END;`);
+    expect(() => applyCaseAction(db, 'rollback', SENIOR, 'approve', 'Verified supporting evidence.'))
+      .toThrow(/simulated audit outage/);
+    expect(getCase(db, 'rollback')).toEqual(before);
+    expect(listAuditEvents(db, 'rollback')).toEqual(events);
+  });
+
+  it('reloads the actor role instead of trusting a forged service context', () => {
+    insertCase('forged', 'pending', 'high');
+    expect(() => applyCaseAction(
+      db, 'forged', { ...ANALYST, role: 'compliance_manager' }, 'approve', 'Supporting evidence verified.',
+    )).toThrowError(expect.objectContaining({ status: 403 }));
+    expect(getCase(db, 'forged')?.status).toBe('pending');
+    expect(listAuditEvents(db, 'forged')).toHaveLength(1);
+  });
+
+  it('uses the current database role after a role change', () => {
+    insertCase('revoked', 'pending', 'medium');
+    db.prepare("UPDATE analysts SET role = 'analyst' WHERE id = ?").run(SENIOR.id);
+    expect(() => applyCaseAction(db, 'revoked', SENIOR, 'approve', 'Evidence checked carefully.'))
+      .toThrowError(expect.objectContaining({ status: 403 }));
+    expect(listAuditEvents(db, 'revoked')).toHaveLength(1);
+  });
+
+  it('takes actor name and trimmed note from the server context', () => {
+    insertCase('actor', 'pending');
+    const result = applyCaseAction(
+      db, 'actor', { ...ANALYST, name: 'Spoofed Name' }, 'escalate', '  Needs compliance review.  ',
+    );
+    expect(result.audit.at(-1)).toMatchObject({
+      actorId: ANALYST.id, actorName: ANALYST.name,
+      note: 'Needs compliance review.', fromStatus: 'pending', toStatus: 'escalated',
+    });
+    expect(verifyChain(result.audit)).toBe(true);
+  });
+
+  it('rejects duplicate terminal decisions without another audit event', () => {
+    insertCase('duplicate', 'pending');
+    applyCaseAction(db, 'duplicate', SENIOR, 'approve', 'Evidence checked carefully.');
+    const before = getCase(db, 'duplicate');
+    expect(() => applyCaseAction(db, 'duplicate', SENIOR, 'approve', 'Evidence checked carefully.'))
+      .toThrowError(expect.objectContaining({ status: 409 }));
+    expect(getCase(db, 'duplicate')).toEqual(before);
+    expect(listAuditEvents(db, 'duplicate')).toHaveLength(2);
+  });
+
+  it('rejects INSERT OR REPLACE attempts to overwrite an audit event', () => {
+    insertCase('replace', 'pending');
+    const before = listAuditEvents(db, 'replace');
+    expect(() => db.exec(`INSERT OR REPLACE INTO audit_events
+      SELECT id, case_id, sequence, actor_id, actor_name, action, from_status, to_status,
+        'forged', created_at, prev_hash, hash FROM audit_events WHERE case_id = 'replace'`))
+      .toThrow(/append-only/);
+    expect(listAuditEvents(db, 'replace')).toEqual(before);
   });
 });

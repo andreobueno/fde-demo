@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkdirSync } from 'node:fs';
 import { schemaSql } from './schema.js';
+import { migrateAnalystRoles } from './migrations.js';
 
 export type Db = Database.Database;
 
@@ -23,6 +24,8 @@ export function openDb(dbPath?: string): Db {
     db.pragma('journal_mode = WAL');
   }
   db.pragma('foreign_keys = ON');
+  db.pragma('recursive_triggers = ON');
   db.exec(schemaSql());
+  migrateAnalystRoles(db);
   return db;
 }
