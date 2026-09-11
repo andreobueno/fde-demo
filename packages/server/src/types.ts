@@ -67,18 +67,24 @@ export interface AuditEvent {
   hash: string;
 }
 
+export interface RiskFactor {
+  signalId: string;
+  code: string;
+  title: string;
+  description: string;
+  severity: SignalSeverity;
+  weight: number;
+  contributionPct: number;
+}
+
 export interface RiskExplanation {
   caseId: string;
   riskScore: number;
   riskLevel: RiskLevel;
+  rawScore: number;
+  scoreCapped: boolean;
+  primaryDriver: RiskFactor | null;
   summary: string;
   thresholds: { medium: number; high: number };
-  factors: Array<{
-    code: string;
-    title: string;
-    description: string;
-    severity: SignalSeverity;
-    weight: number;
-    contributionPct: number;
-  }>;
+  factors: RiskFactor[];
 }
