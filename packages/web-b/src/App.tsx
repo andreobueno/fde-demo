@@ -8,4 +8,23 @@ import { QueuePage } from '@/pages/QueuePage';
 import { CaseDetailPage } from '@/pages/CaseDetailPage';
 import { NotFoundPage } from '@/pages/NotFoundPage';
 const queryClient = new QueryClient();
-export function App() { return <QueryClientProvider client={queryClient}><AnalystProvider><TooltipProvider><BrowserRouter><Routes><Route element={<AppLayout />}><Route path="/" element={<QueuePage />} /><Route path="/cases/:id" element={<CaseDetailPage />} /><Route path="*" element={<NotFoundPage />} /></Route></Routes></BrowserRouter><Toaster /></TooltipProvider></AnalystProvider></QueryClientProvider>; }
+export function App() {
+  return (
+    <QueryClientProvider client={queryClient}>
+      <AnalystProvider>
+        <TooltipProvider>
+          <BrowserRouter>
+            <Routes>
+              <Route element={<AppLayout />}>
+                <Route path="/" element={<QueuePage />} />
+                <Route path="/cases/:id" element={<CaseDetailPage />} />
+                <Route path="*" element={<NotFoundPage />} />
+              </Route>
+            </Routes>
+          </BrowserRouter>
+          <Toaster />
+        </TooltipProvider>
+      </AnalystProvider>
+    </QueryClientProvider>
+  );
+}

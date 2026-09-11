@@ -35,7 +35,11 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
   }
   const text = await response.text();
   let body: unknown;
-  try { body = text ? JSON.parse(text) as unknown : undefined; } catch { body = undefined; }
+  try {
+    body = text ? (JSON.parse(text) as unknown) : undefined;
+  } catch {
+    body = undefined;
+  }
   if (!response.ok) {
     const errorBody = body as ApiError | undefined;
     throw new ApiRequestError(

@@ -28,6 +28,7 @@ Approach B — a component-library SPA. The app uses a small set of owned, shadc
 - Tailwind CSS, PostCSS, and Autoprefixer — utility styling.
 - Vitest — pure logic tests.
 - ESLint, typescript-eslint, React Hooks, and React Refresh plugins — code quality checks.
+- Prettier — consistent source formatting.
 
 ## Trade-offs of this approach
 

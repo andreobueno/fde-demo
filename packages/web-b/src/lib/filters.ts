@@ -1,6 +1,20 @@
 import type { CaseStatus, RiskLevel } from '@/api/types';
-export interface QueueFilters { status: CaseStatus[]; riskLevel: RiskLevel[]; q: string; sort: 'createdAt' | 'updatedAt' | 'riskScore'; order: 'asc' | 'desc'; page: number }
-export const DEFAULT_FILTERS: QueueFilters = { status: [], riskLevel: [], q: '', sort: 'createdAt', order: 'desc', page: 1 };
+export interface QueueFilters {
+  status: CaseStatus[];
+  riskLevel: RiskLevel[];
+  q: string;
+  sort: 'createdAt' | 'updatedAt' | 'riskScore';
+  order: 'asc' | 'desc';
+  page: number;
+}
+export const DEFAULT_FILTERS: QueueFilters = {
+  status: [],
+  riskLevel: [],
+  q: '',
+  sort: 'createdAt',
+  order: 'desc',
+  page: 1,
+};
 const statuses: CaseStatus[] = ['pending', 'in_review', 'approved', 'rejected', 'escalated'];
 const risks: RiskLevel[] = ['low', 'medium', 'high'];
 const isStatus = (v: string): v is CaseStatus => statuses.includes(v as CaseStatus);
@@ -13,7 +27,14 @@ export function parseFilters(search: string): QueueFilters {
   const sort = sortValue === 'updatedAt' || sortValue === 'riskScore' ? sortValue : 'createdAt';
   const order = p.get('order') === 'asc' ? 'asc' : 'desc';
   const parsedPage = Number(p.get('page'));
-  return { status, riskLevel, q: p.get('q') ?? '', sort, order, page: Number.isFinite(parsedPage) && parsedPage >= 1 ? Math.floor(parsedPage) : 1 };
+  return {
+    status,
+    riskLevel,
+    q: p.get('q') ?? '',
+    sort,
+    order,
+    page: Number.isFinite(parsedPage) && parsedPage >= 1 ? Math.floor(parsedPage) : 1,
+  };
 }
 export function serializeFilters(f: QueueFilters): string {
   const p = new URLSearchParams();
@@ -27,6 +48,7 @@ export function serializeFilters(f: QueueFilters): string {
 }
 export function filtersToApiQuery(f: QueueFilters, pageSize = 25): string {
   const p = new URLSearchParams(serializeFilters(f));
-  p.set('page', String(f.page)); p.set('pageSize', String(pageSize));
+  p.set('page', String(f.page));
+  p.set('pageSize', String(pageSize));
   return p.toString();
 }
