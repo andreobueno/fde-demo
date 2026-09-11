@@ -1,5 +1,38 @@
 import type { Db } from './db.js';
 
+export function migrateRefundPendingTotal(db: Db): void {
+  db.transaction(() => {
+    const amounts = db.prepare<[], { amount_cents: bigint }>(
+      "SELECT amount_cents FROM refunds WHERE status = 'pending'",
+    ).safeIntegers().iterate();
+    let total = 0n;
+    for (const { amount_cents } of amounts) {
+      total += amount_cents;
+      if (total > BigInt(Number.MAX_SAFE_INTEGER)) {
+        throw new Error(
+          'Pending refund total exceeds 9007199254740991 cents. Reconcile the existing refunds before restarting; no refund records have been changed.',
+        );
+      }
+    }
+    db.exec(`
+      CREATE TRIGGER IF NOT EXISTS refunds_pending_total_insert
+      AFTER INSERT ON refunds
+      WHEN NEW.status = 'pending'
+      BEGIN
+        SELECT RAISE(ABORT, 'Pending refund total exceeds 9007199254740991 cents')
+        WHERE (SELECT SUM(amount_cents) FROM refunds WHERE status = 'pending') > 9007199254740991;
+      END;
+      CREATE TRIGGER IF NOT EXISTS refunds_pending_total_update
+      AFTER UPDATE OF amount_cents, status ON refunds
+      WHEN NEW.status = 'pending'
+      BEGIN
+        SELECT RAISE(ABORT, 'Pending refund total exceeds 9007199254740991 cents')
+        WHERE (SELECT SUM(amount_cents) FROM refunds WHERE status = 'pending') > 9007199254740991;
+      END;
+    `);
+  }).immediate();
+}
+
 export function migrateRefundAudit(db: Db): void {
   db.transaction(() => {
     const columns = db.prepare<[], { name: string }>('PRAGMA table_info(audit_events)').all();

@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkdirSync } from 'node:fs';
 import { schemaSql } from './schema.js';
-import { migrateAnalystRoles, migrateRefundAudit } from './migrations.js';
+import { migrateAnalystRoles, migrateRefundAudit, migrateRefundPendingTotal } from './migrations.js';
 
 export type Db = Database.Database;
 
@@ -29,6 +29,7 @@ export function openDb(dbPath?: string): Db {
     db.exec(schemaSql());
     migrateAnalystRoles(db);
     migrateRefundAudit(db);
+    migrateRefundPendingTotal(db);
   } catch (error) {
     db.close();
     throw error;
