@@ -13,7 +13,20 @@ export interface QueueFilters {
 
 const ALL_STATUSES: CaseStatus[] = ['pending', 'in_review', 'approved', 'rejected', 'escalated'];
 const ALL_RISK_LEVELS: RiskLevel[] = ['low', 'medium', 'high'];
-const ALL_SORTS: CaseSort[] = ['createdAt', 'updatedAt', 'riskScore'];
+export const ALL_SORTS: CaseSort[] = [
+  'createdAt',
+  'updatedAt',
+  'riskScore',
+  'reference',
+  'customer',
+  'country',
+  'status',
+  'assignedTo',
+];
+
+export function defaultOrderFor(sort: CaseSort): SortOrder {
+  return sort === 'createdAt' || sort === 'updatedAt' || sort === 'riskScore' ? 'desc' : 'asc';
+}
 const ALL_ORDERS: SortOrder[] = ['asc', 'desc'];
 
 export const DEFAULT_FILTERS: QueueFilters = {

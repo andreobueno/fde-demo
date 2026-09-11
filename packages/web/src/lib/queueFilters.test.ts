@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_FILTERS,
+  defaultOrderFor,
   parseQueueFilters,
   queueFiltersToQuery,
   serializeQueueFilters,
@@ -20,6 +21,22 @@ describe('parseQueueFilters', () => {
       order: 'asc',
       page: 3,
     });
+  });
+
+  it('parses the column sort keys', () => {
+    const f = parseQueueFilters(new URLSearchParams('sort=customer&order=asc'));
+    expect(f.sort).toBe('customer');
+    expect(f.order).toBe('asc');
+    for (const sort of ['reference', 'country', 'status', 'assignedTo'] as const) {
+      expect(parseQueueFilters(new URLSearchParams(`sort=${sort}`)).sort).toBe(sort);
+    }
+  });
+
+  it('defaultOrderFor is desc for numeric/date columns and asc for text columns', () => {
+    expect(defaultOrderFor('createdAt')).toBe('desc');
+    expect(defaultOrderFor('riskScore')).toBe('desc');
+    expect(defaultOrderFor('customer')).toBe('asc');
+    expect(defaultOrderFor('assignedTo')).toBe('asc');
   });
 
   it('falls back on unknown values', () => {

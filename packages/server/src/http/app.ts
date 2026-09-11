@@ -11,7 +11,7 @@ import { ApiError, notFound, unauthorized } from '../errors.js';
 import { explainRisk } from '../domain/risk.js';
 import { getAllowedActions, actionBodySchema } from '../domain/transitions.js';
 import { getAnalyst, listAnalysts } from '../repo/analysts.js';
-import { caseStats, getCase, listCases } from '../repo/cases.js';
+import { CASE_SORTS, caseStats, getCase, listCases } from '../repo/cases.js';
 import { getCustomer } from '../repo/customers.js';
 import { listAuditEvents } from '../repo/audit.js';
 import { listSignals } from '../repo/signals.js';
@@ -38,7 +38,7 @@ const listQuerySchema = z.object({
     .pipe(z.array(z.enum(['low', 'medium', 'high'])))
     .optional(),
   q: z.string().trim().max(100).optional(),
-  sort: z.enum(['createdAt', 'updatedAt', 'riskScore']).default('createdAt'),
+  sort: z.enum(CASE_SORTS).default('createdAt'),
   order: z.enum(['asc', 'desc']).default('desc'),
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(25),

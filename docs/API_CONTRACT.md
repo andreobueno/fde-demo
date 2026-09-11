@@ -48,7 +48,7 @@ interface RiskExplanation {
 - `GET /api/cases?status=&riskLevel=&q=&sort=&order=&page=&pageSize=`
   - `status`, `riskLevel`: comma-separated multi-value allowed
   - `q`: case-insensitive match on reference, customer fullName, email
-  - `sort`: `createdAt | updatedAt | riskScore` (default `createdAt`), `order`: `asc|desc` (default `desc`)
+  - `sort`: `createdAt | updatedAt | riskScore | reference | customer | country | status | assignedTo` (default `createdAt`), `order`: `asc|desc` (default `desc`). `customer`/`assignedTo` sort by name case-insensitively; unassigned cases sort last for `assignedTo`.
   - `page` ≥1 default 1, `pageSize` 1..100 default 25
   - → `{ items: KycCase[]; total: number; page: number; pageSize: number }`
 - `GET /api/cases/:id` → `KycCase & { customer: Customer; signals: RiskSignal[]; audit: AuditEvent[]; allowedActions: CaseAction[] }`

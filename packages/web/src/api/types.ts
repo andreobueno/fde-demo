@@ -3,7 +3,15 @@ export type RiskLevel = 'low' | 'medium' | 'high';
 export type CaseAction = 'approve' | 'reject' | 'escalate' | 'start_review';
 export type SignalSeverity = 'low' | 'medium' | 'high';
 export type AnalystRole = 'analyst' | 'senior_analyst';
-export type CaseSort = 'createdAt' | 'updatedAt' | 'riskScore';
+export type CaseSort =
+  | 'createdAt'
+  | 'updatedAt'
+  | 'riskScore'
+  | 'reference'
+  | 'customer'
+  | 'country'
+  | 'status'
+  | 'assignedTo';
 export type SortOrder = 'asc' | 'desc';
 
 export interface Analyst {

@@ -7,23 +7,41 @@ const CASE_SELECT = `
          cu.country_of_residence AS cust_country_of_residence,
          cu.nationality AS cust_nationality
   FROM cases c JOIN customers cu ON cu.id = c.customer_id
+  LEFT JOIN analysts a ON a.id = c.assigned_to
 `;
+
+export const CASE_SORTS = [
+  'createdAt',
+  'updatedAt',
+  'riskScore',
+  'reference',
+  'customer',
+  'country',
+  'status',
+  'assignedTo',
+] as const;
+export type CaseSort = (typeof CASE_SORTS)[number];
 
 export interface CaseListQuery {
   status?: CaseStatus[];
   riskLevel?: RiskLevel[];
   q?: string;
-  sort: 'createdAt' | 'updatedAt' | 'riskScore';
+  sort: CaseSort;
   order: 'asc' | 'desc';
   page: number;
   pageSize: number;
 }
 
-const SORT_COLUMNS = {
+const SORT_COLUMNS: Record<CaseSort, string> = {
   createdAt: 'c.created_at',
   updatedAt: 'c.updated_at',
   riskScore: 'c.risk_score',
-} as const;
+  reference: 'c.reference',
+  customer: 'cu.full_name COLLATE NOCASE',
+  country: 'cu.country_of_residence',
+  status: 'c.status',
+  assignedTo: 'a.name COLLATE NOCASE',
+};
 
 export function listCases(
   db: Db,
@@ -47,7 +65,9 @@ export function listCases(
   }
 
   const whereSql = where.length > 0 ? ` WHERE ${where.join(' AND ')}` : '';
-  const orderSql = ` ORDER BY ${SORT_COLUMNS[query.sort]} ${query.order === 'asc' ? 'ASC' : 'DESC'}, c.id ASC`;
+  const direction = query.order === 'asc' ? 'ASC' : 'DESC';
+  const nullsLast = query.sort === 'assignedTo' ? '(a.name IS NULL) ASC, ' : '';
+  const orderSql = ` ORDER BY ${nullsLast}${SORT_COLUMNS[query.sort]} ${direction}, c.id ASC`;
 
   const total = (
     db
