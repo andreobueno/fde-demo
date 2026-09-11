@@ -67,13 +67,20 @@ function CaseHeader({ kase, analysts }: { kase: CaseDetail; analysts: Analyst[] 
 }
 
 function Actions({ kase }: { kase: CaseDetail }) {
-  if (kase.allowedActions.length === 0) {
+  if (kase.status === 'approved' || kase.status === 'rejected') {
     return (
       <section className="panel actions" aria-label="Actions">
         <p className="notice">
           <strong>Case closed.</strong> This case is {STATUS_LABELS[kase.status].toLowerCase()}; no further actions
           are available.
         </p>
+      </section>
+    );
+  }
+  if (kase.allowedActions.length === 0) {
+    return (
+      <section className="panel actions" aria-label="Actions">
+        <p className="notice">The selected role does not have permission to act on this case.</p>
       </section>
     );
   }
@@ -93,7 +100,9 @@ function Actions({ kase }: { kase: CaseDetail }) {
         </a>
       ))}
       {kase.status === 'escalated' ? (
-        <span className="muted">Escalated cases can only be resolved by a senior analyst.</span>
+        <span className="muted">
+          Senior analysts can resolve low- and medium-risk cases; compliance managers can resolve cases at all risk levels.
+        </span>
       ) : null}
     </section>
   );
@@ -293,14 +302,14 @@ export function CaseMain({ kase, explanation, chain, analysts }: CasePageProps) 
 }
 
 export interface ActionDialogProps {
-  kase: Pick<CaseDetail, 'id' | 'reference' | 'riskLevel' | 'status'>;
+  kase: Pick<CaseDetail, 'id' | 'reference' | 'riskLevel' | 'status' | 'approvalNoteRequired'>;
   action: CaseAction;
   note: string;
   error: string | null;
 }
 
 export function ActionDialog({ kase, action, note, error }: ActionDialogProps) {
-  const rule = noteRule(action, kase.riskLevel);
+  const rule = noteRule(action, kase.riskLevel, kase.approvalNoteRequired);
   const titleId = 'action-dialog-title';
   return (
     <dialog id="action-dialog" className="dialog" open aria-labelledby={titleId}>
@@ -332,7 +341,7 @@ export function ActionDialog({ kase, action, note, error }: ActionDialogProps) {
           autoFocus
           defaultValue={note}
           maxLength={NOTE_MAX}
-          minLength={rule.required && action !== 'approve' ? NOTE_MIN : undefined}
+          minLength={rule.required ? NOTE_MIN : undefined}
           required={rule.required}
           aria-describedby="note-hint"
         />

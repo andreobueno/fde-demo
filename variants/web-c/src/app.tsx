@@ -282,7 +282,7 @@ export function createApp({ api, publicDir }: AppOptions) {
           .catch(next);
       };
 
-      const clientError = validateNote(action, kase.riskLevel, rawNote);
+      const clientError = validateNote(action, kase.riskLevel, rawNote, kase.approvalNoteRequired);
       if (clientError) {
         respondError(clientError, 400);
         return;

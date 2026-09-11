@@ -2,13 +2,14 @@ import request from 'supertest';
 import { describe, expect, it } from 'vitest';
 import { createApiClient } from '../src/api/client.js';
 import type { FetchLike } from '../src/api/client.js';
-import type { Analyst, AuditEvent, CaseDetail, CaseStats, KycCase, RiskExplanation } from '../src/api/types.js';
+import type { ActionResponse, Analyst, AuditEvent, CaseDetail, CaseStats, KycCase, RiskExplanation } from '../src/api/types.js';
 import { createApp } from '../src/app.js';
 import fixture from './fixtures-audit.json' with { type: 'json' };
 
 const analysts: Analyst[] = [
   { id: 'ana-001', name: 'Marta Ellison', role: 'senior_analyst' },
   { id: 'ana-003', name: 'Grete Lindholm', role: 'analyst' },
+  { id: 'ana-006', name: 'Sofia Chen', role: 'compliance_manager' },
 ];
 
 const audit = fixture as AuditEvent[];
@@ -59,6 +60,7 @@ const detail: CaseDetail = {
   ],
   audit,
   allowedActions: ['approve', 'reject', 'escalate'],
+  approvalNoteRequired: true,
 };
 
 const explanation: RiskExplanation = {
@@ -90,6 +92,7 @@ function json(body: unknown, status = 200): Response {
 
 interface StubOptions {
   action?: (call: Call) => Response;
+  caseDetail?: Partial<CaseDetail>;
   unreachable?: boolean;
 }
 
@@ -106,10 +109,12 @@ function buildApp(opts: StubOptions = {}) {
     if (pathname === '/api/analysts') return json(analysts);
     if (pathname === '/api/cases/stats') return json(stats);
     if (pathname === '/api/cases') return json({ items: [kase], total: 1, page: 1, pageSize: 25 });
-    if (pathname === '/api/cases/case-006') return json(detail);
+    if (pathname === '/api/cases/case-006') return json({ ...detail, ...opts.caseDetail });
     if (pathname === '/api/cases/case-006/risk-explanation') return json(explanation);
     if (pathname === '/api/cases/case-006/actions' && init?.method === 'POST') {
-      return opts.action ? opts.action({ url, init }) : json({ ...kase, status: 'approved', audit, allowedActions: [] });
+      return opts.action ? opts.action({ url, init }) : json({
+        ...kase, status: 'approved', audit, allowedActions: [], approvalNoteRequired: true,
+      } satisfies ActionResponse);
     }
     return json({ error: { code: 'NOT_FOUND', message: 'Case not found' } }, 404);
   };
@@ -200,6 +205,32 @@ describe('GET /cases/:id', () => {
     expect(res.text).toContain('Case not found');
   });
 
+  it.each(['pending', 'in_review', 'escalated'] as const)('shows a role restriction for an open %s case without actions', async (status) => {
+    const { app } = buildApp({ caseDetail: { status, allowedActions: [] } });
+    const res = await request(app).get('/cases/case-006').expect(200);
+    expect(res.text).toContain('The selected role does not have permission to act on this case.');
+    expect(res.text).not.toContain('Case closed.');
+    expect(res.text).not.toContain('btn-action-');
+  });
+
+  it.each(['approved', 'rejected'] as const)('shows closure for a terminal %s case', async (status) => {
+    const { app } = buildApp({ caseDetail: { status, allowedActions: [] } });
+    const res = await request(app).get('/cases/case-006').expect(200);
+    expect(res.text).toContain('<strong>Case closed.</strong>');
+    expect(res.text).toContain(`This case is ${status}; no further actions are available.`);
+    expect(res.text).not.toContain('does not have permission');
+    expect(res.text).not.toContain('btn-action-');
+  });
+
+  it.each(['low', 'medium', 'high'] as const)('describes both decision roles for escalated %s-risk cases', async (riskLevel) => {
+    const { app } = buildApp({ caseDetail: { status: 'escalated', riskLevel, allowedActions: ['approve', 'reject'] } });
+    const res = await request(app).get('/cases/case-006').set('Cookie', 'analyst_id=ana-006').expect(200);
+    expect(res.text).toContain('Senior analysts can resolve low- and medium-risk cases; compliance managers can resolve cases at all risk levels.');
+    expect(res.text).not.toContain('can only be resolved by a senior analyst');
+    expect(res.text).toContain('>Approve</a>');
+    expect(res.text).toContain('>Reject</a>');
+  });
+
   it('serves the action dialog as a fragment for htmx and inline for full page loads', async () => {
     const { app } = buildApp();
     const frag = await request(app).get('/cases/case-006/actions/reject').set('HX-Request', 'true');
@@ -227,7 +258,7 @@ describe('POST /cases/:id/actions/:action', () => {
     const res = await request(app)
       .post('/cases/case-006/actions/approve')
       .set('HX-Request', 'true')
-      .set('Cookie', 'analyst_id=ana-003')
+      .set('Cookie', 'analyst_id=ana-006')
       .type('form')
       .send({ note: 'Documents verified in person.' });
     expect(res.status).toBe(200);
@@ -235,7 +266,7 @@ describe('POST /cases/:id/actions/:action', () => {
     expect(post).toBeDefined();
     expect(post!.url).toBe('http://api.test/api/cases/case-006/actions');
     const headers = post!.init!.headers as Record<string, string>;
-    expect(headers['x-analyst-id']).toBe('ana-003');
+    expect(headers['x-analyst-id']).toBe('ana-006');
     expect(JSON.parse(post!.init!.body as string)).toEqual({ action: 'approve', note: 'Documents verified in person.' });
     expect(res.text).toContain('id="case-main"');
     expect(res.text).toContain('Case approved.');
@@ -244,7 +275,7 @@ describe('POST /cases/:id/actions/:action', () => {
 
   it('redirects back to the case for non-htmx form posts', async () => {
     const { app } = buildApp();
-    const res = await request(app).post('/cases/case-006/actions/approve').type('form').send({ note: 'ok note' });
+    const res = await request(app).post('/cases/case-006/actions/approve').type('form').send({ note: 'Reviewed documents.' });
     expect(res.status).toBe(303);
     expect(res.headers.location).toBe('/cases/case-006?done=approve');
   });
@@ -263,10 +294,14 @@ describe('POST /cases/:id/actions/:action', () => {
     expect(calls.some((c) => c.init?.method === 'POST')).toBe(false);
   });
 
-  it('renders the server validation error message inside the dialog', async () => {
-    const { app } = buildApp({
-      action: () =>
-        json({ error: { code: 'FORBIDDEN', message: "Resolving an escalated case requires role 'senior_analyst'." } }, 403),
+  it.each([
+    { status: 400, code: 'VALIDATION_ERROR', message: 'A note of 10..1000 characters is required to approve a case.' },
+    { status: 401, code: 'UNAUTHORIZED', message: 'Unknown analyst context.' },
+    { status: 403, code: 'FORBIDDEN', message: "Your role does not permit 'approve' on a 'high' risk case." },
+    { status: 409, code: 'INVALID_TRANSITION', message: "Cannot perform 'approve' on a case with status 'approved'." },
+  ])('renders authoritative API $status errors after preliminary validation passes', async ({ status, code, message }) => {
+    const { app, calls } = buildApp({
+      action: () => json({ error: { code, message } }, status),
     });
     const res = await request(app)
       .post('/cases/case-006/actions/approve')
@@ -275,13 +310,150 @@ describe('POST /cases/:id/actions/:action', () => {
       .send({ note: 'Looks fine after review.' });
     expect(res.status).toBe(200);
     expect(res.headers['hx-retarget']).toBe('#dialog-slot');
+    expect(res.headers['hx-reswap']).toBe('innerHTML');
     expect(res.text).toContain('role="alert"');
-    expect(res.text).toContain('Resolving an escalated case requires role &#x27;senior_analyst&#x27;.');
+    expect(res.text).toContain(message.replaceAll("'", '&#x27;'));
+    expect(res.text).toContain('>Looks fine after review.</textarea>');
+    expect(res.text).not.toContain('Case approved.');
 
     const full = await request(app).post('/cases/case-006/actions/approve').type('form').send({ note: 'Looks fine after review.' });
-    expect(full.status).toBe(403);
+    expect(full.status).toBe(status);
     expect(full.text).toContain('<html');
-    expect(full.text).toContain('senior_analyst');
+    expect(full.text).toContain(message.replaceAll("'", '&#x27;'));
+    expect(full.text).toContain('>Looks fine after review.</textarea>');
+    expect(calls.filter((call) => call.init?.method === 'POST')).toHaveLength(2);
+  });
+});
+
+const noteScenarios = [
+  { action: 'approve', riskLevel: 'low', approvalNoteRequired: true, required: true },
+  { action: 'approve', riskLevel: 'medium', approvalNoteRequired: true, required: true },
+  { action: 'approve', riskLevel: 'high', approvalNoteRequired: true, required: true },
+  { action: 'approve', riskLevel: 'high', approvalNoteRequired: false, required: true },
+  { action: 'approve', riskLevel: 'low', approvalNoteRequired: false, required: false },
+  { action: 'approve', riskLevel: 'medium', approvalNoteRequired: false, required: false },
+  { action: 'reject', riskLevel: 'low', approvalNoteRequired: false, required: true },
+  { action: 'escalate', riskLevel: 'high', approvalNoteRequired: false, required: true },
+  { action: 'start_review', riskLevel: 'high', approvalNoteRequired: true, required: false },
+  { action: 'start_review', riskLevel: 'low', approvalNoteRequired: false, required: false },
+] as const;
+
+describe.each([true, false])('policy-aware action forms (htmx: %s)', (isHx) => {
+  it.each(noteScenarios)('GET renders $action/$riskLevel/$approvalNoteRequired note attributes and hints', async ({
+    action, riskLevel, approvalNoteRequired, required,
+  }) => {
+    const { app, calls } = buildApp({ caseDetail: { riskLevel, approvalNoteRequired } });
+    const res = await request(app).get(`/cases/case-006/actions/${action}`)
+      .set('HX-Request', String(isHx)).set('Cookie', 'analyst_id=ana-006').expect(200);
+    const textarea = res.text.match(/<textarea\b[^>]*>/)?.[0] ?? '';
+    expect(textarea).toMatch(/\bmaxlength="1000"/i);
+    expect(textarea).toContain('aria-describedby="note-hint"');
+    expect(textarea.includes('required=""')).toBe(required);
+    expect(/\bminlength="10"/i.test(textarea)).toBe(required);
+    expect(res.text).toContain(required ? '(required)' : '(optional)');
+    expect(res.text).toContain(required
+      ? '10–1000 characters (excluding surrounding whitespace)'
+      : 'Optional note (max 1000 characters).');
+    if (!required) expect(textarea).not.toMatch(/\bminlength=/i);
+    if (action === 'approve' && riskLevel === 'high') expect(res.text).toContain('Approving a high-risk case requires');
+    expect(res.text.includes('<html')).toBe(!isHx);
+    expect(calls.every((call) => new Headers(call.init?.headers).get('x-analyst-id') === 'ana-006')).toBe(true);
+  });
+
+  it.each(noteScenarios.filter((scenario) => scenario.required))(
+    'POST rejects invalid required notes for $action/$riskLevel/$approvalNoteRequired before mutation',
+    async ({ action, riskLevel, approvalNoteRequired }) => {
+      const { app, calls } = buildApp({ caseDetail: { riskLevel, approvalNoteRequired } });
+      for (const note of [undefined, ' \t\n ', ' 123456789 ', 'x'.repeat(1001)]) {
+        const res = await request(app).post(`/cases/case-006/actions/${action}`)
+          .set('HX-Request', String(isHx)).type('form')
+          .send({ note, approvalNoteRequired: 'false' }).expect(isHx ? 200 : 400);
+        expect(res.text).toContain('role="alert"');
+        expect(res.text).toContain(note?.length === 1001
+          ? 'Note must be at most 1000 characters.'
+          : 'Note must be at least 10 characters.');
+        expect(res.text).toContain('(required)');
+        expect(res.text).toMatch(/<textarea\b[^>]*minlength="10"/i);
+        if (note !== undefined) expect(res.text).toContain(`${note}</textarea>`);
+        expect(res.text.includes('<html')).toBe(!isHx);
+        if (isHx) expect(res.headers['hx-retarget']).toBe('#dialog-slot');
+      }
+      expect(calls.some((call) => call.init?.method === 'POST')).toBe(false);
+    },
+  );
+
+  it.each(noteScenarios.filter((scenario) => scenario.required))(
+    'POST forwards trimmed boundary notes for $action/$riskLevel/$approvalNoteRequired',
+    async ({ action, riskLevel, approvalNoteRequired }) => {
+      const { app, calls } = buildApp({ caseDetail: { riskLevel, approvalNoteRequired } });
+      for (const note of ['1234567890', 'x'.repeat(1000)]) {
+        const res = await request(app).post(`/cases/case-006/actions/${action}`)
+          .set('HX-Request', String(isHx)).set('Cookie', 'analyst_id=ana-006').type('form')
+          .send({ note: ` \t${note}\n ` }).expect(isHx ? 200 : 303);
+        if (isHx) {
+          expect(res.text).toContain('id="case-main"');
+          expect(res.text).toContain('id="dialog-slot" hx-swap-oob="true"');
+        } else {
+          expect(res.headers.location).toBe(`/cases/case-006?done=${action}`);
+        }
+      }
+      const posts = calls.filter((call) => call.init?.method === 'POST');
+      expect(posts).toHaveLength(2);
+      expect(posts.map((post) => JSON.parse(post.init!.body as string))).toEqual([
+        { action, note: '1234567890' },
+        { action, note: 'x'.repeat(1000) },
+      ]);
+      expect(calls.every((call) => new Headers(call.init?.headers).get('x-analyst-id') === 'ana-006')).toBe(true);
+    },
+  );
+
+  it.each(noteScenarios.filter((scenario) => !scenario.required))(
+    'POST permits empty and short optional notes for $action/$riskLevel/$approvalNoteRequired',
+    async ({ action, riskLevel, approvalNoteRequired }) => {
+      const { app, calls } = buildApp({ caseDetail: { riskLevel, approvalNoteRequired } });
+      for (const note of [undefined, ' \t\n ', ' ok ']) {
+        await request(app).post(`/cases/case-006/actions/${action}`)
+          .set('HX-Request', String(isHx)).type('form').send({ note }).expect(isHx ? 200 : 303);
+      }
+      const posts = calls.filter((call) => call.init?.method === 'POST');
+      expect(posts.map((post) => JSON.parse(post.init!.body as string))).toEqual([
+        { action }, { action }, { action, note: 'ok' },
+      ]);
+    },
+  );
+
+  it('reloads the server note policy on POST instead of trusting the earlier dialog or submitted flag', async () => {
+    const caseDetail: Partial<CaseDetail> = { riskLevel: 'medium', approvalNoteRequired: false };
+    const { app, calls } = buildApp({ caseDetail });
+    const dialog = await request(app).get('/cases/case-006/actions/approve')
+      .set('HX-Request', String(isHx)).expect(200);
+    expect(dialog.text).toContain('(optional)');
+    caseDetail.approvalNoteRequired = true;
+    const res = await request(app).post('/cases/case-006/actions/approve')
+      .set('HX-Request', String(isHx)).type('form')
+      .send({ note: '', approvalNoteRequired: 'false' }).expect(isHx ? 200 : 400);
+    expect(res.text).toContain('Note must be at least 10 characters.');
+    expect(res.text).toContain('(required)');
+    expect(calls.some((call) => call.init?.method === 'POST')).toBe(false);
+  });
+
+  it('displays an API policy rejection even when the last case read allowed an empty approval note', async () => {
+    const message = 'A note of 10..1000 characters is required to approve a case.';
+    const { app, calls } = buildApp({
+      caseDetail: { riskLevel: 'medium', approvalNoteRequired: false },
+      action: () => json({ error: { code: 'VALIDATION_ERROR', message } }, 400),
+    });
+    const res = await request(app).post('/cases/case-006/actions/approve')
+      .set('HX-Request', String(isHx)).set('Cookie', 'analyst_id=ana-001').type('form')
+      .send({ note: '' }).expect(isHx ? 200 : 400);
+    expect(res.text).toContain('role="alert"');
+    expect(res.text).toContain(message);
+    expect(res.text).not.toContain('Case approved.');
+    if (isHx) expect(res.headers['hx-retarget']).toBe('#dialog-slot');
+    const posts = calls.filter((call) => call.init?.method === 'POST');
+    expect(posts).toHaveLength(1);
+    expect(JSON.parse(posts[0]!.init!.body as string)).toEqual({ action: 'approve' });
+    expect(calls.every((call) => new Headers(call.init?.headers).get('x-analyst-id') === 'ana-001')).toBe(true);
   });
 });
 
