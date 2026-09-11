@@ -181,6 +181,24 @@ export function explainRisk(
   return explainAssessment(caseId, score, level, signals, policy.thresholds);
 }
 
+/** Largest-remainder apportionment: integer shares of 100 that always sum to 100 (or all 0 when total is 0). */
+function apportionPercentages(weights: number[]): number[] {
+  const total = weights.reduce((sum, w) => sum + w, 0);
+  if (total === 0) return weights.map(() => 0);
+  const shares = weights.map((w, i) => {
+    const exact = (w / total) * 100;
+    const floor = Math.floor(exact);
+    return { i, floor, rem: exact - floor };
+  });
+  let remaining = 100 - shares.reduce((sum, s) => sum + s.floor, 0);
+  for (const s of [...shares].sort((a, b) => b.rem - a.rem || a.i - b.i)) {
+    if (remaining <= 0) break;
+    s.floor += 1;
+    remaining -= 1;
+  }
+  return shares.map((s) => s.floor);
+}
+
 /** Explains an already-computed (persisted) assessment without re-scoring it. */
 export function explainAssessment(
   caseId: string,
@@ -189,14 +207,14 @@ export function explainAssessment(
   signals: Signal[],
   thresholds: RiskThresholds,
 ): RiskExplanation {
-  const rawTotal = signals.reduce((sum, s) => sum + s.weight, 0);
-  const factors = signals.map((s) => ({
+  const percentages = apportionPercentages(signals.map((s) => s.weight));
+  const factors = signals.map((s, i) => ({
     code: s.code,
     title: s.title,
     description: s.description,
     severity: s.severity,
     weight: s.weight,
-    contributionPct: rawTotal === 0 ? 0 : Math.round((s.weight / rawTotal) * 100),
+    contributionPct: percentages[i] ?? 0,
   }));
 
   const summary =
