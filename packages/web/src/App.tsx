@@ -1,11 +1,13 @@
-import { BrowserRouter, Link, Outlet, Route, Routes } from 'react-router-dom';
+import { BrowserRouter, Link, Outlet, Route, Routes, useLocation } from 'react-router-dom';
 import { AnalystProvider, useAnalyst } from './analyst/AnalystContext';
 import { CasePage } from './pages/CasePage';
 import { NotFoundPage } from './pages/NotFoundPage';
 import { QueuePage } from './pages/QueuePage';
+import { PolicyPage } from './pages/PolicyPage';
 
 function Layout() {
   const { analystId, setAnalystId, analysts } = useAnalyst();
+  const { pathname } = useLocation();
   return (
     <div>
       <header
@@ -21,8 +23,9 @@ function Layout() {
         <Link to="/" style={{ fontWeight: 700, color: 'var(--color-text)' }}>
           KYC Review Console
         </Link>
+        <Link to="/policy">Policy</Link>
         <label style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-          Analyst
+          Demo identity
           <select value={analystId} onChange={(e) => setAnalystId(e.target.value)}>
             {analysts.length === 0 ? <option value={analystId}>{analystId}</option> : null}
             {analysts.map((a) => (
@@ -33,7 +36,7 @@ function Layout() {
           </select>
         </label>
       </header>
-      <Outlet />
+      <Outlet key={`${analystId}:${pathname}`} />
     </div>
   );
 }
@@ -46,6 +49,7 @@ export function App() {
           <Route element={<Layout />}>
             <Route path="/" element={<QueuePage />} />
             <Route path="/cases/:id" element={<CasePage />} />
+            <Route path="/policy" element={<PolicyPage />} />
             <Route path="*" element={<NotFoundPage />} />
           </Route>
         </Routes>

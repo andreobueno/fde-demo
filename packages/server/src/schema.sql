@@ -1,7 +1,7 @@
 CREATE TABLE IF NOT EXISTS analysts (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
-  role TEXT NOT NULL CHECK (role IN ('analyst', 'senior_analyst'))
+  role TEXT NOT NULL CHECK (role IN ('analyst', 'senior_analyst', 'compliance_manager'))
 );
 
 CREATE TABLE IF NOT EXISTS customers (
@@ -71,4 +71,43 @@ CREATE TRIGGER IF NOT EXISTS audit_events_no_delete
 BEFORE DELETE ON audit_events
 BEGIN
   SELECT RAISE(ABORT, 'audit_events is append-only');
+END;
+
+CREATE TABLE IF NOT EXISTS review_policy (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  version INTEGER NOT NULL CHECK (version >= 1),
+  require_approval_note INTEGER NOT NULL CHECK (require_approval_note IN (0, 1)),
+  updated_at TEXT NOT NULL,
+  updated_by TEXT REFERENCES analysts(id)
+);
+
+INSERT OR IGNORE INTO review_policy
+  (id, version, require_approval_note, updated_at, updated_by)
+VALUES (1, 1, 1, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), NULL);
+
+CREATE TABLE IF NOT EXISTS policy_audit_events (
+  id TEXT PRIMARY KEY,
+  version INTEGER NOT NULL UNIQUE,
+  actor_id TEXT NOT NULL,
+  actor_name TEXT NOT NULL,
+  actor_role TEXT NOT NULL,
+  action TEXT NOT NULL CHECK (action = 'policy_updated'),
+  created_at TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  previous_state TEXT NOT NULL,
+  new_state TEXT NOT NULL,
+  prev_hash TEXT NOT NULL,
+  hash TEXT NOT NULL
+);
+
+CREATE TRIGGER IF NOT EXISTS policy_audit_events_no_update
+BEFORE UPDATE ON policy_audit_events
+BEGIN
+  SELECT RAISE(ABORT, 'policy_audit_events is append-only');
+END;
+
+CREATE TRIGGER IF NOT EXISTS policy_audit_events_no_delete
+BEFORE DELETE ON policy_audit_events
+BEGIN
+  SELECT RAISE(ABORT, 'policy_audit_events is append-only');
 END;

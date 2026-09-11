@@ -62,6 +62,7 @@ const ANALYSTS: Analyst[] = [
   { id: 'ana-003', name: 'Grete Lindholm', role: 'analyst' },
   { id: 'ana-004', name: 'Kwame Osei', role: 'analyst' },
   { id: 'ana-005', name: 'Ines Morales', role: 'analyst' },
+  { id: 'ana-006', name: 'Sofia Chen', role: 'compliance_manager' },
 ];
 
 const APPROVE_NOTES = [
@@ -92,7 +93,7 @@ const db = openDb();
 
 function resetSchema() {
   db.exec('PRAGMA foreign_keys = OFF;');
-  for (const t of ['audit_events', 'risk_signals', 'cases', 'customers', 'analysts']) {
+  for (const t of ['policy_audit_events', 'review_policy', 'audit_events', 'risk_signals', 'cases', 'customers', 'analysts']) {
     db.exec(`DROP TABLE IF EXISTS ${t};`);
   }
   db.exec('DROP TRIGGER IF EXISTS audit_events_no_update;');
@@ -129,6 +130,7 @@ function seed() {
   const now = new Date();
   const analysts = ANALYSTS;
   const seniors = analysts.filter((a) => a.role === 'senior_analyst');
+  const managers = analysts.filter((a) => a.role === 'compliance_manager');
   const juniors = analysts;
 
   const run = db.transaction(() => {
@@ -176,6 +178,7 @@ function seed() {
       );
 
       const { score, level, signals } = computeRisk(customer, now);
+      const decisionMakers = level === 'high' ? managers : [...seniors, ...managers];
       const caseId = `case-${String(i + 1).padStart(3, '0')}`;
       const reference = `KYC-2026-${String(i + 1).padStart(4, '0')}`;
       const createdAt = new Date(now.getTime() - int(1, 45) * 86400_000).toISOString();
@@ -209,23 +212,27 @@ function seed() {
         assignedTo = actor.id;
       }
       if (status === 'approved') {
+        const decisionMaker = pick(decisionMakers);
         events.push({
-          actor, action: 'approve', fromStatus: 'in_review', toStatus: 'approved',
+          actor: decisionMaker, action: 'approve', fromStatus: 'in_review', toStatus: 'approved',
           note: pick(APPROVE_NOTES),
         });
+        assignedTo = decisionMaker.id;
       } else if (status === 'rejected') {
+        const decisionMaker = pick(decisionMakers);
         events.push({
-          actor, action: 'reject', fromStatus: 'in_review', toStatus: 'rejected',
+          actor: decisionMaker, action: 'reject', fromStatus: 'in_review', toStatus: 'rejected',
           note: pick(REJECT_NOTES),
         });
+        assignedTo = decisionMaker.id;
       } else if (status === 'escalated') {
         events.push({
           actor, action: 'escalate', fromStatus: 'in_review', toStatus: 'escalated',
           note: pick(ESCALATE_NOTES),
         });
-        // Some escalated cases get resolved by a senior analyst.
+        // Some escalated cases have already been resolved.
         if (chance(0.5)) {
-          const senior = pick(seniors);
+          const senior = pick(decisionMakers);
           const resolved = chance(0.5);
           events.push({
             actor: senior,
