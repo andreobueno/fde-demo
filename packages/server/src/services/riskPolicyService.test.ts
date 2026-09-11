@@ -25,6 +25,22 @@ beforeEach(() => {
 afterEach(() => db.close());
 
 describe('risk evaluation persistence', () => {
+  it('preserves evidence IDs while updating thresholds and recording the rescore', () => {
+    const before = listSignals(db, 'capped');
+    const change = updateRiskPolicy(db, 'ana-006', { thresholds: { medium: 40, high: 70 } });
+    expect(change.change?.recomputedCases).toBe(1);
+    expect(listSignals(db, 'capped')).toEqual(before);
+    expect(getCaseRiskThresholds(db, 'capped')).toEqual({ medium: 40, high: 70 });
+    const events = listAuditEvents(db, 'capped');
+    expect(events).toHaveLength(1);
+    expect(events[0]?.note).toContain('Thresholds 30/60 → 40/70. Evidence unchanged.');
+    expect(verifyChain(events)).toBe(true);
+    const explanation = explainRisk(getCase(db, 'capped')!, listSignals(db, 'capped'),
+      getCaseRiskThresholds(db, 'capped'));
+    expect(explanation.factors.map((factor) => factor.signalId)).toEqual(before.map((signal) => signal.id));
+    expect(explanation.thresholds).toEqual({ medium: 40, high: 70 });
+  });
+
   it('audits changed evidence even when both scores remain capped at 100', () => {
     const change = updateRiskPolicy(db, 'ana-006', { weights: { SANCTIONS_HIT: 41 } });
     expect(change.change?.recomputedCases).toBe(1);

@@ -121,7 +121,7 @@ function rescoreOpenCases(
       previousThresholds.high === policy.thresholds.high
     ) continue;
 
-    replaceSignals(db, kase.id, signals);
+    if (!signalsMatch) replaceSignals(db, kase.id, signals);
 
     const iso = now.toISOString();
     updateCaseRisk(db, kase.id, score, level, iso, policy.thresholds);
