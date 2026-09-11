@@ -1,6 +1,15 @@
-import type { Customer, RiskExplanation, RiskLevel, RiskSignal, SignalSeverity } from '../types.js';
+import type {
+  Customer,
+  PolicyRuleCode,
+  RiskExplanation,
+  RiskLevel,
+  RiskPolicy,
+  RiskSignal,
+  SignalSeverity,
+} from '../types.js';
+import { DEFAULT_RISK_POLICY, ruleDef } from './policy.js';
 
-export const RISK_THRESHOLDS = { medium: 30, high: 60 } as const;
+export const RISK_THRESHOLDS = DEFAULT_RISK_POLICY.thresholds;
 
 export const HIGH_RISK_JURISDICTIONS: readonly string[] = [
   'IR',
@@ -34,171 +43,141 @@ export const CASH_INTENSIVE_OCCUPATIONS: readonly string[] = [
 
 export const HIGH_EXPECTED_VOLUME_USD = 50_000;
 export const NEW_ACCOUNT_DAYS = 30;
+export const DOCUMENT_EXPIRING_DAYS = 30;
+export const ADVERSE_MEDIA_MAX_HITS = 3;
 
-interface SignalDef {
-  code: string;
-  title: string;
-  severity: SignalSeverity;
-  weight: number;
-  description: string;
-}
+type Signal = Omit<RiskSignal, 'id' | 'caseId'>;
 
-function buildSignal(def: SignalDef): Omit<RiskSignal, 'id' | 'caseId'> {
-  return {
-    code: def.code,
-    title: def.title,
-    description: def.description,
-    severity: def.severity,
-    weight: def.weight,
-  };
+const DAY_MS = 1000 * 60 * 60 * 24;
+
+export function riskLevelFor(score: number, policy: RiskPolicy): RiskLevel {
+  return score >= policy.thresholds.high
+    ? 'high'
+    : score >= policy.thresholds.medium
+      ? 'medium'
+      : 'low';
 }
 
 export function computeRisk(
   customer: Customer,
   now: Date,
-): { score: number; level: RiskLevel; signals: Omit<RiskSignal, 'id' | 'caseId'>[] } {
-  const signals: Omit<RiskSignal, 'id' | 'caseId'>[] = [];
+  policy: RiskPolicy = DEFAULT_RISK_POLICY,
+): { score: number; level: RiskLevel; signals: Signal[] } {
+  const signals: Signal[] = [];
+
+  const fire = (
+    code: PolicyRuleCode,
+    description: string,
+    overrides: { weight?: number; severity?: SignalSeverity } = {},
+  ) => {
+    const def = ruleDef(code);
+    const weight = overrides.weight ?? policy.weights[code];
+    if (weight <= 0) return;
+    signals.push({
+      code,
+      title: def.title,
+      description,
+      severity: overrides.severity ?? def.severity,
+      weight,
+    });
+  };
 
   if (customer.sanctionsHit) {
-    signals.push(
-      buildSignal({
-        code: 'SANCTIONS_HIT',
-        title: 'Sanctions list match',
-        severity: 'high',
-        weight: 60,
-        description: 'Customer has a potential sanctions list match requiring immediate review.',
-      }),
+    fire(
+      'SANCTIONS_HIT',
+      'Customer has a potential sanctions list match requiring immediate review.',
     );
   }
 
   if (customer.pepFlag) {
-    signals.push(
-      buildSignal({
-        code: 'PEP',
-        title: 'Politically exposed person',
-        severity: 'high',
-        weight: 35,
-        description: 'Customer is identified as a politically exposed person (PEP).',
-      }),
-    );
+    fire('PEP', 'Customer is identified as a politically exposed person (PEP).');
   }
 
   if (
     HIGH_RISK_JURISDICTIONS.includes(customer.countryOfResidence) ||
     HIGH_RISK_JURISDICTIONS.includes(customer.nationality)
   ) {
-    signals.push(
-      buildSignal({
-        code: 'HIGH_RISK_JURISDICTION',
-        title: 'High-risk jurisdiction',
-        severity: 'high',
-        weight: 25,
-        description: `Residence (${customer.countryOfResidence}) or nationality (${customer.nationality}) is in a high-risk jurisdiction.`,
-      }),
+    fire(
+      'HIGH_RISK_JURISDICTION',
+      `Residence (${customer.countryOfResidence}) or nationality (${customer.nationality}) is in a high-risk jurisdiction.`,
     );
   }
 
+  if (customer.idDocumentExpiresAt) {
+    const daysToExpiry = Math.floor(
+      (new Date(customer.idDocumentExpiresAt).getTime() - now.getTime()) / DAY_MS,
+    );
+    if (daysToExpiry < DOCUMENT_EXPIRING_DAYS) {
+      fire(
+        'DOCUMENT_EXPIRING',
+        daysToExpiry < 0
+          ? `ID document expired ${-daysToExpiry} day(s) ago.`
+          : `ID document expires in ${daysToExpiry} day(s) (< ${DOCUMENT_EXPIRING_DAYS} days).`,
+      );
+    }
+  }
+
   if (customer.adverseMediaHits > 0) {
-    const weight = Math.min(customer.adverseMediaHits * 10, 30);
-    signals.push(
-      buildSignal({
-        code: 'ADVERSE_MEDIA',
-        title: 'Adverse media',
-        severity: weight >= 30 ? 'high' : 'medium',
-        weight,
-        description: `${customer.adverseMediaHits} adverse media hit(s) found (10 points each, capped at 30).`,
-      }),
+    const perHit = policy.weights.ADVERSE_MEDIA;
+    const hits = Math.min(customer.adverseMediaHits, ADVERSE_MEDIA_MAX_HITS);
+    const weight = perHit * hits;
+    fire(
+      'ADVERSE_MEDIA',
+      `${customer.adverseMediaHits} adverse media hit(s) found (${perHit} points each, capped at ${ADVERSE_MEDIA_MAX_HITS} hits).`,
+      { weight, severity: hits >= ADVERSE_MEDIA_MAX_HITS ? 'high' : 'medium' },
     );
   }
 
   if (!customer.idDocumentVerified) {
-    signals.push(
-      buildSignal({
-        code: 'ID_DOC_UNVERIFIED',
-        title: 'ID document unverified',
-        severity: 'medium',
-        weight: 20,
-        description: 'Customer identity document has not been verified.',
-      }),
-    );
+    fire('ID_DOC_UNVERIFIED', 'Customer identity document has not been verified.');
   }
 
   if (!customer.addressVerified) {
-    signals.push(
-      buildSignal({
-        code: 'ADDRESS_UNVERIFIED',
-        title: 'Address unverified',
-        severity: 'low',
-        weight: 10,
-        description: 'Customer address has not been verified.',
-      }),
-    );
+    fire('ADDRESS_UNVERIFIED', 'Customer address has not been verified.');
   }
 
   if (customer.expectedMonthlyVolumeUsd > HIGH_EXPECTED_VOLUME_USD) {
-    signals.push(
-      buildSignal({
-        code: 'HIGH_EXPECTED_VOLUME',
-        title: 'High expected volume',
-        severity: 'medium',
-        weight: 15,
-        description: `Expected monthly volume of $${customer.expectedMonthlyVolumeUsd.toLocaleString('en-US')} exceeds $${HIGH_EXPECTED_VOLUME_USD.toLocaleString('en-US')}.`,
-      }),
+    fire(
+      'HIGH_EXPECTED_VOLUME',
+      `Expected monthly volume of $${customer.expectedMonthlyVolumeUsd.toLocaleString('en-US')} exceeds $${HIGH_EXPECTED_VOLUME_USD.toLocaleString('en-US')}.`,
     );
   }
 
   if (OPAQUE_SOURCES_OF_FUNDS.includes(customer.sourceOfFunds)) {
-    signals.push(
-      buildSignal({
-        code: 'OPAQUE_SOURCE_OF_FUNDS',
-        title: 'Opaque source of funds',
-        severity: 'medium',
-        weight: 15,
-        description: `Declared source of funds "${customer.sourceOfFunds}" is difficult to verify.`,
-      }),
+    fire(
+      'OPAQUE_SOURCE_OF_FUNDS',
+      `Declared source of funds "${customer.sourceOfFunds}" is difficult to verify.`,
     );
   }
 
-  const accountAgeDays =
-    (now.getTime() - new Date(customer.accountOpenedAt).getTime()) / (1000 * 60 * 60 * 24);
+  const accountAgeDays = (now.getTime() - new Date(customer.accountOpenedAt).getTime()) / DAY_MS;
   if (accountAgeDays >= 0 && accountAgeDays < NEW_ACCOUNT_DAYS) {
-    signals.push(
-      buildSignal({
-        code: 'NEW_ACCOUNT',
-        title: 'New account',
-        severity: 'low',
-        weight: 5,
-        description: `Account opened ${Math.floor(accountAgeDays)} day(s) ago (< ${NEW_ACCOUNT_DAYS} days).`,
-      }),
+    fire(
+      'NEW_ACCOUNT',
+      `Account opened ${Math.floor(accountAgeDays)} day(s) ago (< ${NEW_ACCOUNT_DAYS} days).`,
     );
   }
 
   if (CASH_INTENSIVE_OCCUPATIONS.includes(customer.occupation)) {
-    signals.push(
-      buildSignal({
-        code: 'CASH_INTENSIVE_OCCUPATION',
-        title: 'Cash-intensive occupation',
-        severity: 'low',
-        weight: 10,
-        description: `Occupation "${customer.occupation}" is associated with cash-intensive activity.`,
-      }),
+    fire(
+      'CASH_INTENSIVE_OCCUPATION',
+      `Occupation "${customer.occupation}" is associated with cash-intensive activity.`,
     );
   }
 
   const rawScore = signals.reduce((sum, s) => sum + s.weight, 0);
   const score = Math.min(Math.max(rawScore, 0), 100);
-  const level: RiskLevel =
-    score >= RISK_THRESHOLDS.high ? 'high' : score >= RISK_THRESHOLDS.medium ? 'medium' : 'low';
 
-  return { score, level, signals };
+  return { score, level: riskLevelFor(score, policy), signals };
 }
 
 export function explainRisk(
   caseId: string,
   customer: Customer,
   now: Date,
+  policy: RiskPolicy = DEFAULT_RISK_POLICY,
 ): RiskExplanation {
-  const { score, level, signals } = computeRisk(customer, now);
+  const { score, level, signals } = computeRisk(customer, now, policy);
   const factors = signals.map((s) => ({
     code: s.code,
     title: s.title,
@@ -218,7 +197,7 @@ export function explainRisk(
     riskScore: score,
     riskLevel: level,
     summary,
-    thresholds: { medium: RISK_THRESHOLDS.medium, high: RISK_THRESHOLDS.high },
+    thresholds: { ...policy.thresholds },
     factors,
   };
 }

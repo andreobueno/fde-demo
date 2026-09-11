@@ -2,6 +2,7 @@ import { BrowserRouter, Link, Outlet, Route, Routes } from 'react-router-dom';
 import { AnalystProvider, useAnalyst } from './analyst/AnalystContext';
 import { CasePage } from './pages/CasePage';
 import { NotFoundPage } from './pages/NotFoundPage';
+import { PolicyPage } from './pages/PolicyPage';
 import { QueuePage } from './pages/QueuePage';
 
 function Layout() {
@@ -18,9 +19,13 @@ function Layout() {
           borderBottom: '1px solid var(--color-border)',
         }}
       >
-        <Link to="/" style={{ fontWeight: 700, color: 'var(--color-text)' }}>
-          KYC Review Console
-        </Link>
+        <nav style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
+          <Link to="/" style={{ fontWeight: 700, color: 'var(--color-text)' }}>
+            KYC Review Console
+          </Link>
+          <Link to="/">Queue</Link>
+          <Link to="/policy">Risk policy</Link>
+        </nav>
         <label style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
           Analyst
           <select value={analystId} onChange={(e) => setAnalystId(e.target.value)}>
@@ -46,6 +51,7 @@ export function App() {
           <Route element={<Layout />}>
             <Route path="/" element={<QueuePage />} />
             <Route path="/cases/:id" element={<CasePage />} />
+            <Route path="/policy" element={<PolicyPage />} />
             <Route path="*" element={<NotFoundPage />} />
           </Route>
         </Routes>

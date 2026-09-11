@@ -19,6 +19,7 @@ export function rowToCustomer(r: any): Customer {
     expectedMonthlyVolumeUsd: r.expected_monthly_volume_usd,
     sourceOfFunds: r.source_of_funds,
     idDocumentType: r.id_document_type,
+    idDocumentExpiresAt: r.id_document_expires_at ?? null,
     idDocumentVerified: !!r.id_document_verified,
     addressVerified: !!r.address_verified,
     pepFlag: !!r.pep_flag,

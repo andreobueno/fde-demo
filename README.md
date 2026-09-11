@@ -96,22 +96,34 @@ Rules enforced by the domain layer (`packages/server/src/domain/transitions.ts`)
 
 ## Risk scoring model
 
-Deterministic: score = sum of triggered signal weights, clamped to 0–100. Level: `< 30` low, `30–59` medium, `≥ 60` high.
+Deterministic: score = sum of triggered signal weights, clamped to 0–100. Level: `< medium` low, `medium..high-1` medium, `≥ high` high. Weights and thresholds are **configuration, not code** — see [Risk policy](#risk-policy). Defaults:
 
-| Code | Weight | Trigger |
+| Code | Default weight | Trigger |
 | --- | --- | --- |
-| `SANCTIONS_HIT` | 60 | Customer matches a sanctions list |
-| `PEP` | 35 | Politically exposed person |
+| `SANCTIONS_HIT` | 40 | Customer matches a sanctions list |
+| `PEP` | 30 | Politically exposed person |
 | `HIGH_RISK_JURISDICTION` | 25 | Residence or nationality in the high-risk list |
 | `ADVERSE_MEDIA` | 10 per hit (max 30) | Adverse media hits |
 | `ID_DOC_UNVERIFIED` | 20 | ID document not verified |
-| `HIGH_EXPECTED_VOLUME` | 15 | Expected volume > 50k USD/month |
+| `DOCUMENT_EXPIRING` | 10 | ID document expires in < 30 days |
+| `HIGH_EXPECTED_VOLUME` | 15 | Unusual transaction volume (> 50k USD/month expected) |
 | `OPAQUE_SOURCE_OF_FUNDS` | 15 | Source of funds is `crypto`, `cash_intensive_business` or `unknown` |
 | `ADDRESS_UNVERIFIED` | 10 | Address not verified |
 | `CASH_INTENSIVE_OCCUPATION` | 10 | Cash-intensive occupation |
 | `NEW_ACCOUNT` | 5 | Account opened < 30 days ago |
 
 The explanation endpoint reports each factor's `contributionPct` relative to the final (clamped) score so analysts can see what drove the level.
+
+## Risk policy
+
+The **Risk policy** page (`/policy`) shows every rule with its current and default weight plus the medium/high thresholds (default 30 / 60). A `compliance_manager` can edit them in the UI; everyone else sees the page read-only. Saving calls `PUT /api/policy`, which:
+
+- validates the patch (weights 0–100, thresholds 1–100, `medium < high`; unknown rule codes are rejected),
+- persists the new values in `risk_policy` and appends a versioned row to the append-only `risk_policy_changes` table,
+- re-scores every **open** case (`pending`, `in_review`, `escalated`) inside the same transaction and appends a `RISK_RESCORED` audit event to each case whose score or level changed — closed cases keep the score they were decided under,
+- returns the new policy and the change record (`recomputedCases`).
+
+`GET /api/policy` and `GET /api/policy/history` are readable by anyone. No deploy or code change is needed to change the rules; the scoring engine (`packages/server/src/domain/risk.ts`) reads the policy at request time.
 
 ## Audit hash chain
 
@@ -134,8 +146,9 @@ There is no login. Every request may carry `x-analyst-id: <analystId>`; mutation
 | `ana-003` | Grete Lindholm | `analyst` |
 | `ana-004` | Kwame Osei | `analyst` |
 | `ana-005` | Ines Morales | `analyst` |
+| `ana-006` | Dana Whitcombe | `compliance_manager` |
 
-`GET /api/me` echoes the resolved analyst; `GET /api/analysts` lists all of them. Only senior analysts can resolve escalated cases.
+`GET /api/me` echoes the resolved analyst; `GET /api/analysts` lists all of them. Only senior analysts can resolve escalated cases; only the compliance manager can change the risk policy.
 
 ## Further reading
 
