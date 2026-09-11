@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { getCase, getRiskExplanation, postCaseAction } from '../api/client';
+import { ApiError, getCase, getRiskExplanation, postCaseAction } from '../api/client';
 import { useApi } from '../api/useApi';
 import { useAnalyst } from '../analyst/AnalystContext';
 import type {
@@ -29,7 +29,7 @@ const ACTION_BUTTON_CLASS: Record<CaseAction, string> = {
 
 export function CasePage() {
   const { id } = useParams<{ id: string }>();
-  const { analystId, analysts } = useAnalyst();
+  const { analystId, analysts, identitySignal } = useAnalyst();
   const [openAction, setOpenAction] = useState<CaseAction | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
@@ -60,7 +60,7 @@ export function CasePage() {
     );
   }
 
-  if (!caseResult.data) {
+  if (!caseResult.data || caseResult.loading) {
     return (
       <div className={styles.page}>
         <Loading />
@@ -71,10 +71,15 @@ export function CasePage() {
   const kase = caseResult.data;
 
   const handleSubmitAction = async (note: string) => {
+    identitySignal.throwIfAborted();
     if (!openAction || !id) {
       return;
     }
-    await postCaseAction(id, openAction, note, analystId);
+    if (!kase.allowedActions.includes(openAction)) {
+      throw new ApiError(403, 'FORBIDDEN', 'This action is no longer available.');
+    }
+    await postCaseAction(id, openAction, note, analystId, identitySignal);
+    identitySignal.throwIfAborted();
     setToast(`Case ${kase.reference}: ${ACTION_LABELS[openAction]} succeeded`);
     setOpenAction(null);
     caseResult.reload();
@@ -114,7 +119,11 @@ export function CasePage() {
       <section className={styles.section}>
         <h2>Actions</h2>
         {kase.allowedActions.length === 0 ? (
-          <p className={styles.closed}>Case closed — no further actions available.</p>
+          <p className={styles.closed}>
+            {kase.status === 'approved' || kase.status === 'rejected'
+              ? 'Case closed — no further actions available.'
+              : 'Your role has no permitted actions for this case.'}
+          </p>
         ) : (
           <div className={styles.actions}>
             {kase.allowedActions.map((action) => (
@@ -136,7 +145,8 @@ export function CasePage() {
       {openAction ? (
         <ActionDialog
           action={openAction}
-          riskLevel={kase.riskLevel}
+          approvalNoteRequired={kase.approvalNoteRequired}
+          signal={identitySignal}
           caseReference={kase.reference}
           onClose={() => setOpenAction(null)}
           onSubmit={handleSubmitAction}

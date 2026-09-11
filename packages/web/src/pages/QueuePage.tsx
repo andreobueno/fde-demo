@@ -153,6 +153,8 @@ function FilterBar({ filters, onChange, onToggleStatus, onToggleRisk }: FilterBa
     setSearchInput(filters.q);
   }, [filters.q]);
 
+  useEffect(() => () => window.clearTimeout(debounceRef.current), []);
+
   const handleSearchChange = (value: string) => {
     setSearchInput(value);
     window.clearTimeout(debounceRef.current);

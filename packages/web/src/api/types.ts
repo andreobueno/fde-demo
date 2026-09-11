@@ -2,7 +2,7 @@ export type CaseStatus = 'pending' | 'in_review' | 'approved' | 'rejected' | 'es
 export type RiskLevel = 'low' | 'medium' | 'high';
 export type CaseAction = 'approve' | 'reject' | 'escalate' | 'start_review';
 export type SignalSeverity = 'low' | 'medium' | 'high';
-export type AnalystRole = 'analyst' | 'senior_analyst';
+export type AnalystRole = 'analyst' | 'senior_analyst' | 'compliance_manager';
 export type CaseSort =
   | 'createdAt'
   | 'updatedAt'
@@ -18,6 +18,37 @@ export interface Analyst {
   id: string;
   name: string;
   role: AnalystRole;
+}
+
+export interface CurrentAnalyst extends Analyst {
+  permissions: string[];
+}
+
+export interface Policy {
+  version: number;
+  requireApprovalNote: boolean;
+  updatedAt: string;
+  updatedBy: string | null;
+}
+
+export interface PolicyUpdate {
+  version: number;
+  requireApprovalNote: boolean;
+  reason: string;
+}
+
+export interface PolicyAuditEvent {
+  id: string;
+  actorId: string;
+  actorName: string;
+  actorRole: AnalystRole;
+  action: 'policy_updated';
+  createdAt: string;
+  reason: string;
+  previousState: Policy;
+  newState: Policy;
+  prevHash: string;
+  hash: string;
 }
 
 export interface Customer {
@@ -100,6 +131,7 @@ export interface CaseDetail extends KycCase {
   signals: RiskSignal[];
   audit: AuditEvent[];
   allowedActions: CaseAction[];
+  approvalNoteRequired: boolean;
 }
 
 export interface CaseListResponse {
@@ -118,6 +150,7 @@ export interface CaseStats {
 export interface ActionResponse extends KycCase {
   audit: AuditEvent[];
   allowedActions: CaseAction[];
+  approvalNoteRequired: boolean;
 }
 
 export interface ApiErrorBody {
