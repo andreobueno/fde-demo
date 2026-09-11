@@ -236,6 +236,25 @@ describe('explainRisk', () => {
     expect(e.factors.reduce((sum, f) => sum + f.contributionPct, 0)).toBe(100);
   });
 
+  it('contributionPct sums to exactly 100 for equal weights with repeating fractions', () => {
+    const evaluation = computeRisk(
+      baseCustomer({
+        idDocumentExpiresAt: '2026-06-15T00:00:00Z',
+        addressVerified: false,
+        occupation: 'car_dealer',
+      }),
+      NOW,
+    );
+    const recordedCase = { id: 'case-w', riskScore: evaluation.score, riskLevel: evaluation.level };
+    const savedSignals = evaluation.signals.map((signal, index) => ({
+      ...signal, id: `signal-${index}`, caseId: recordedCase.id,
+    }));
+    const e = explainRisk(recordedCase, savedSignals);
+    expect(e.factors.map((f) => f.weight)).toEqual([10, 10, 10]);
+    expect(e.factors.map((f) => f.contributionPct)).toEqual([34, 33, 33]);
+    expect(explainRisk(recordedCase, [...savedSignals].reverse())).toEqual(e);
+  });
+
   it('reports whole elapsed days for expired documents', () => {
     const r = computeRisk(baseCustomer({ idDocumentExpiresAt: '2026-05-31T12:00:00Z' }), NOW);
     expect(r.signals.find((s) => s.code === 'DOCUMENT_EXPIRING')?.description).toBe(
@@ -306,7 +325,7 @@ describe('explainRisk', () => {
     expect(e.riskScore).toBe(100);
     expect(e.rawScore).toBe(115);
     expect(e.scoreCapped).toBe(true);
-    expect(e.factors.map((f) => f.contributionPct)).toEqual([52, 30, 17]);
+    expect(e.factors.map((f) => f.contributionPct)).toEqual([52, 31, 17]);
     expect(e.summary).not.toContain('does not match');
   });
 

@@ -176,6 +176,24 @@ function compareStrings(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
+/** Largest-remainder apportionment: integer shares of 100 that always sum to 100 (or all 0 when total is 0). */
+function apportionPercentages(weights: number[]): number[] {
+  const total = weights.reduce((sum, w) => sum + w, 0);
+  if (total === 0) return weights.map(() => 0);
+  const shares = weights.map((w, i) => {
+    const exact = (w / total) * 100;
+    const floor = Math.floor(exact);
+    return { i, floor, rem: exact - floor };
+  });
+  let remaining = 100 - shares.reduce((sum, s) => sum + s.floor, 0);
+  for (const s of [...shares].sort((a, b) => b.rem - a.rem || a.i - b.i)) {
+    if (remaining <= 0) break;
+    s.floor += 1;
+    remaining -= 1;
+  }
+  return shares.map((s) => s.floor);
+}
+
 export function explainRisk(
   kase: Pick<KycCase, 'id' | 'riskScore' | 'riskLevel'>,
   signals: readonly RiskSignal[],
@@ -186,14 +204,15 @@ export function explainRisk(
     b.weight - a.weight || compareStrings(a.code, b.code) || compareStrings(a.id, b.id),
   );
   const rawScore = sortedSignals.reduce((sum, s) => sum + s.weight, 0);
-  const factors = sortedSignals.map((s) => ({
+  const percentages = apportionPercentages(sortedSignals.map((s) => s.weight));
+  const factors = sortedSignals.map((s, i) => ({
     signalId: s.id,
     code: s.code,
     title: s.title,
     description: s.description,
     severity: s.severity,
     weight: s.weight,
-    contributionPct: rawScore === 0 ? 0 : Math.round((s.weight / rawScore) * 100),
+    contributionPct: percentages[i] ?? 0,
   }));
   const primaryDriver = factors[0] ?? null;
 
