@@ -1,0 +1,101 @@
+# Architecture
+
+Scope: `packages/server`. The UI (`packages/web`) is a separate workspace that only talks to the HTTP API.
+
+## Request flow
+
+```mermaid
+flowchart LR
+    UI[packages/web] -->|HTTP JSON<br/>x-analyst-id| HTTP[http/app.ts<br/>routing, zod parsing,<br/>identity, error envelope]
+    HTTP --> SVC[services/*<br/>use cases,<br/>transactions]
+    SVC --> DOM[domain/*<br/>pure rules:<br/>transitions, risk, audit]
+    SVC --> REPO[repo/*<br/>SQL, row mapping]
+    REPO --> DB[(SQLite<br/>better-sqlite3)]
+```
+
+Example: `POST /api/cases/:id/actions`
+
+1. `http/app.ts` parses the body with `actionBodySchema` (zod) and resolves the analyst from `x-analyst-id` (401 if missing/unknown).
+2. `services/caseService.applyCaseAction(db, caseId, actor, action, note)` opens a transaction.
+3. Inside it, `domain/transitions.validateAction` decides allow/deny and the target status — no I/O.
+4. `repo/cases.updateCaseStatus`, then `domain/audit.computeEventHash` over the previous event's hash, then `repo/audit.insertAuditEvent`.
+5. The transaction commits; the service returns `{ case, audit, allowedActions }`; the HTTP layer serialises it.
+
+## Module responsibilities
+
+| Layer | Path | Owns | Must not |
+| --- | --- | --- | --- |
+| http | `src/http/app.ts` | Express app factory `createApp(db)`, routes, request validation (zod), identity middleware, security headers/CORS, error → envelope mapping | Contain business rules or SQL |
+| services | `src/services/*` | Use cases: load state, call domain, persist, define transaction boundaries, translate domain error codes to `ApiError` statuses | Format HTTP responses; compute rules inline |
+| domain | `src/domain/*` | Pure functions and types: `transitions.ts` (allowed actions, validation), `risk.ts` (score, level, explanation), `audit.ts` (canonical hash, chain verification) | Import `db`, Express, or anything with I/O |
+| repo | `src/repo/*` | Prepared statements, row ↔ type mapping (`mappers.ts`), list/filter/paginate SQL | Make decisions; throw domain errors |
+| db / schema | `src/db.ts`, `src/schema.sql`, `src/schema.ts` | Open the database (`KYC_DB_PATH`, WAL, foreign keys), apply schema idempotently, append-only triggers on `audit_events` | — |
+| seed | `src/seed.ts` | Deterministic fixture generation (`kyc-demo-2026`), drops and recreates | Be imported by runtime code |
+| types / errors | `src/types.ts`, `src/errors.ts` | Contract types mirroring `docs/API_CONTRACT.md`; `ApiError(status, code, message, details?)` | — |
+
+Dependency direction is strictly downward: `http → services → {domain, repo} → db`. Domain has no dependencies on other layers.
+
+## Why business rules are pure functions
+
+`validateAction`, `getAllowedActions`, `computeRisk*` and `computeEventHash` take plain values and return plain values. Consequences:
+
+- Tests are table-driven and instant (`domain/*.test.ts`); the full transition × role × risk matrix is covered without a database.
+- The same functions serve both the write path (validate before persisting) and the read path (`allowedActions` in `GET /api/cases/:id`), so UI and API can never disagree about what is permitted.
+- Changing a rule (a new weight, a new role) is a one-file diff with an obvious test to update.
+- The rules could be moved to a UI bundle or another service unchanged.
+
+Services are where impurity lives: they read current state, call the pure functions, and write results.
+
+## Transaction boundaries
+
+Every mutating use case is one `db.transaction(() => ...)()` in the service layer. For a case action the transaction covers: read case → validate → update case row → read last audit event → insert new audit event → re-read case. better-sqlite3 transactions are synchronous, so there is no interleaving within a transaction; two concurrent actions on the same case are serialised and the second is validated against the committed state (and gets `409 INVALID_TRANSITION` if the transition is no longer valid). Reads are single statements and do not open explicit transactions.
+
+The rule: if a use case writes more than one row, or writes and then reads back, it belongs in a service function wrapped in a transaction. Repos never open transactions.
+
+## Error envelope
+
+All errors are `ApiError` instances converted by the final Express error handler to
+
+```json
+{ "error": { "code": "INVALID_TRANSITION", "message": "Cannot perform 'approve' on a case with status 'approved'." } }
+```
+
+| Status | Code | Source |
+| --- | --- | --- |
+| 400 | `VALIDATION_ERROR` | zod parse failure (details contains issues) or domain note rules |
+| 401 | `UNAUTHORIZED` | missing/unknown `x-analyst-id` on a mutation |
+| 403 | `FORBIDDEN` | role not allowed for the transition |
+| 404 | `NOT_FOUND` | unknown case or route |
+| 409 | `INVALID_TRANSITION` | action not valid from the current status |
+| 500 | `INTERNAL` | anything unexpected; message is generic, stack is logged server-side |
+
+Domain functions return `{ ok: false, error: { code, message } }` rather than throwing; the service maps the code to a status. This keeps the domain free of HTTP concepts.
+
+## How to add the next internal tool
+
+The company expects 10+ more internal apps. Copy this repository as the template and keep the following.
+
+**Workspace layout**
+
+```
+package.json             # workspaces: packages/*, variants/*; root scripts delegate with -w
+tsconfig.base.json       # shared strict TS config
+docs/API_CONTRACT.md     # write this first; it is the spec the API and UI are built from
+packages/server/src/
+  http/       services/       domain/       repo/       db.ts  schema.sql  seed.ts  types.ts  errors.ts
+packages/web/
+```
+
+**Steps**
+
+1. Write `docs/API_CONTRACT.md`: entities, enums, endpoints, validation and state rules, error codes, seed expectations. Everything downstream is derived from it.
+2. Define `types.ts` from the contract and `schema.sql` from the types. Add append-only triggers for any table that is an audit log.
+3. Implement `domain/` first as pure functions with table-driven tests. If a rule needs the database, it belongs in a service, not the domain.
+4. Implement `repo/` as thin prepared-statement wrappers with one mapper per table.
+5. Implement `services/` use cases; one transaction per mutating use case.
+6. Implement `http/app.ts` as `createApp(db)` so tests can instantiate it with `openDb(':memory:')`. Validate every body and query string with zod at the edge.
+7. Write `seed.ts` with a fixed PRNG seed and fictional data; make it idempotent (drop + recreate). Log summary counts at the end.
+8. Tests at three levels: domain (pure), service (in-memory SQLite), HTTP (supertest against `createApp`). Keep them in `*.test.ts` beside the code.
+9. Keep the identity middleware and error handler as-is until the shared platform pieces (SSO, policy engine, Postgres, audit ledger — see `ASSUMPTIONS.md`) exist; then replace them once and share across apps.
+
+**Reuse candidates for a shared package** once a second app exists: `ApiError` + error handler, identity middleware, hash-chain audit module, `openDb`/schema bootstrap, zod query-string helpers, pagination shape `{ items, total, page, pageSize }`.

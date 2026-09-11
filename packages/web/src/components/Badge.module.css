@@ -1,0 +1,48 @@
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.low {
+  background: var(--badge-low-bg);
+  color: var(--badge-low-fg);
+}
+
+.medium {
+  background: var(--badge-medium-bg);
+  color: var(--badge-medium-fg);
+}
+
+.high {
+  background: var(--badge-high-bg);
+  color: var(--badge-high-fg);
+}
+
+.pending {
+  background: var(--status-pending-bg);
+  color: var(--status-pending-fg);
+}
+
+.in_review {
+  background: var(--status-in_review-bg);
+  color: var(--status-in_review-fg);
+}
+
+.approved {
+  background: var(--status-approved-bg);
+  color: var(--status-approved-fg);
+}
+
+.rejected {
+  background: var(--status-rejected-bg);
+  color: var(--status-rejected-fg);
+}
+
+.escalated {
+  background: var(--status-escalated-bg);
+  color: var(--status-escalated-fg);
+}
