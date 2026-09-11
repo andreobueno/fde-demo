@@ -20,7 +20,7 @@ interface Analyst { id: string; name: string; role: 'analyst' | 'senior_analyst'
 interface Customer {
   id: string; fullName: string; dateOfBirth: string; nationality: string; countryOfResidence: string;
   occupation: string; email: string; accountOpenedAt: string; expectedMonthlyVolumeUsd: number;
-  sourceOfFunds: string; idDocumentType: string; idDocumentVerified: boolean; addressVerified: boolean;
+  sourceOfFunds: string; idDocumentType: string; idDocumentExpiresAt: string | null; idDocumentVerified: boolean; addressVerified: boolean;
   pepFlag: boolean; sanctionsHit: boolean; adverseMediaHits: number;
 }
 interface RiskSignal { id: string; caseId: string; code: string; title: string; description: string; severity: SignalSeverity; weight: number }
@@ -75,7 +75,7 @@ interface RiskExplanation {
   - invalid transition → 409 `INVALID_TRANSITION`; validation → 400 `VALIDATION_ERROR`; forbidden role → 403 `FORBIDDEN`
   - → `KycCase & { audit: AuditEvent[]; allowedActions: CaseAction[]; approvalNoteRequired: boolean }`
 
-### Policy
+### Approval-note policy
 
 ```ts
 interface Policy {
@@ -104,10 +104,28 @@ interface PolicyAuditEvent {
 - `GET /api/policy/audit` → `PolicyAuditEvent[]`, ordered by new policy version.
 - Policy updates and audit appends are atomic. This policy only controls low/medium approval notes; elevated roles and high-risk justification are fixed security boundaries.
 
-## Risk engine (deterministic)
-Score = sum of signal weights, clamped 0..100. Level: `<30 low`, `30..59 medium`, `≥60 high`.
-Signal catalogue (code → weight): `SANCTIONS_HIT` 60, `PEP` 35, `HIGH_RISK_JURISDICTION` 25 (residence or nationality in list), `ADVERSE_MEDIA` 10 per hit (max 30), `ID_DOC_UNVERIFIED` 20, `ADDRESS_UNVERIFIED` 10, `HIGH_EXPECTED_VOLUME` 15 (>50k USD/month), `OPAQUE_SOURCE_OF_FUNDS` 15 (`crypto`, `cash_intensive_business`, `unknown`), `NEW_ACCOUNT` 5 (<30 days), `CASH_INTENSIVE_OCCUPATION` 10.
-These scoring rules are unchanged. The explanation endpoint describes the saved evaluation rather than running the engine again; legacy or inconsistent records retain their recorded score, level and evidence.
+### Risk-scoring policy
+
+These settings, versions and history are independent from approval-note policy and refunds.
+All endpoints require a known identity. All roles can read; only managers can write.
+
+- `GET /api/risk-policy` → `RiskPolicy` = `{ rules: { code, title, description, weight, defaultWeight }[]; thresholds: { medium, high }; defaultThresholds; version; updatedAt; updatedBy }` (initial version 0)
+- `GET /api/risk-policy/history` → `RiskPolicyChange[]` = `{ id, version, actorId, actorName, changes: { key, from, to }[], recomputedCases, createdAt }[]` (newest first)
+- `PUT /api/risk-policy` body `{ weights?: Record<RuleCode, int 0..100>; thresholds?: { medium?: int 1..100; high?: int 1..100 } }`, role `compliance_manager` (else 403 `FORBIDDEN`)
+  - `medium < high` enforced against the merged policy; unknown rule codes → 400 `VALIDATION_ERROR`
+  - re-scores open cases (`pending|in_review|escalated`) in the same immediate transaction, appends `RISK_RESCORED` audit events for changed score, level, evidence or thresholds; closed cases and refunds untouched
+  - stores scoring thresholds with the evaluation so later policy updates do not change a closed-case explanation
+  - versions increase independently of review policy; concurrent partial updates are serialized, last write to each setting wins (no optimistic version precondition)
+  - → `{ policy: RiskPolicy; change: RiskPolicyChange | null }` (`change` is `null` when the patch is a no-op)
+
+## Risk engine (deterministic, policy-driven)
+Score = sum of signal weights, clamped 0..100. Level: `<medium low`, `medium..high-1 medium`, `≥high high`; default thresholds 30 / 60. Weights and thresholds come from the persisted risk policy (`risk_policy` table), editable via `PUT /api/risk-policy`.
+Default catalogue (code → weight): `SANCTIONS_HIT` 40, `PEP` 30, `HIGH_RISK_JURISDICTION` 25 (residence or nationality in list), `ADVERSE_MEDIA` 10 per hit (max 30), `ID_DOC_UNVERIFIED` 20, `DOCUMENT_EXPIRING` 10 (ID document expires <30 days), `ADDRESS_UNVERIFIED` 10, `HIGH_EXPECTED_VOLUME` 15 (>50k USD/month), `OPAQUE_SOURCE_OF_FUNDS` 15 (`crypto`, `cash_intensive_business`, `unknown`), `NEW_ACCOUNT` 5 (<30 days), `CASH_INTENSIVE_OCCUPATION` 10.
+
+The explanation endpoint describes the saved evaluation, including its thresholds, rather than
+running the engine again. Legacy or inconsistent records retain their recorded score, level and
+evidence. Legacy cases without threshold snapshots use the original 30/60 defaults; earlier
+custom evaluation thresholds cannot be reliably recovered. New rescoring captures thresholds.
 
 ## Seed
 `npm run seed` (destructive, drops+recreates including policy and both audit histories). 6 identities (3 analysts, 2 seniors, 1 compliance manager), ~60 customers/cases, deterministic PRNG seed `kyc-demo-2026`, fictional names — no real PII. Mix of statuses; audit chain includes creation event `CASE_CREATED`. Seeded decisions use actors authorized for the case's risk.

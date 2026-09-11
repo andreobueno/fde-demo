@@ -23,6 +23,14 @@ Example: `POST /api/cases/:id/actions`
 
 `PUT /api/policy` requires `policy:manage`, a change reason and the current version. `policyService` reloads the actor, validates permission/version, and commits the updated setting with a hash-linked before/after audit event in one immediate transaction. High-risk decision permissions and note requirements are fixed in the authorization domain and cannot be relaxed by this setting.
 
+Risk-scoring policy is separate: `PUT /api/risk-policy` calls `riskPolicyService`, with the same
+identity and manager permission. Its transaction saves rule weights/thresholds, re-evaluates open
+cases, captures thresholds in `case_risk_thresholds`, appends case audit events for changed
+evaluations, and records independent versioned field differences in `risk_policy_changes`.
+Approval-note settings and refunds are unaffected. Closed cases keep their saved evaluation;
+explanation reads never apply the current policy or clock. Risk history is append-only but is
+not hash-chained. Legacy evaluations without snapshots use the original 30/60 thresholds.
+
 ## Module responsibilities
 
 | Layer | Path | Owns | Must not |
@@ -63,7 +71,7 @@ Services are where impurity lives: they read current state, call the pure functi
 
 ## Transaction boundaries
 
-Every mutating use case uses `db.transaction(() => ...).immediate()` in the service layer. Case actions cover: reload actor → read case/policy → validate → update case → append audit → re-read case. Writes are serialized and the next action is checked against committed state (`409 INVALID_TRANSITION` when no longer legal). Policy writes additionally enforce the client's version (`409 POLICY_CONFLICT`). Case requests do not yet include a client version. Reads do not open explicit transactions.
+Every mutating use case uses `db.transaction(() => ...).immediate()` in the service layer. Case actions cover: reload actor → read case/policy → validate → update case → append audit → re-read case. Writes are serialized and the next action is checked against committed state (`409 INVALID_TRANSITION` when no longer legal). Approval-note writes additionally enforce the client's version (`409 POLICY_CONFLICT`). Risk-policy patches and case requests do not yet include a client version. Reads do not open explicit transactions.
 
 The rule: if a use case writes more than one row, or writes and then reads back, it belongs in a service function wrapped in a transaction. Repos never open transactions.
 

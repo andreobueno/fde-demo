@@ -96,22 +96,31 @@ const db = openDb();
 
 function resetSchema() {
   db.exec('PRAGMA foreign_keys = OFF;');
-  for (const t of ['policy_audit_events', 'review_policy', 'audit_events', 'refunds', 'risk_signals', 'cases', 'customers', 'analysts']) {
+  for (const t of [
+    'policy_audit_events', 'review_policy', 'refunds', 'case_risk_thresholds',
+    'audit_events', 'risk_signals', 'cases', 'customers', 'analysts',
+    'risk_policy', 'risk_policy_changes',
+  ]) {
     db.exec(`DROP TABLE IF EXISTS ${t};`);
   }
   db.exec('DROP TRIGGER IF EXISTS audit_events_no_update;');
   db.exec('DROP TRIGGER IF EXISTS audit_events_no_delete;');
+  db.exec('DROP TRIGGER IF EXISTS risk_policy_changes_no_update;');
+  db.exec('DROP TRIGGER IF EXISTS risk_policy_changes_no_delete;');
   db.exec(schemaSql());
   db.exec('PRAGMA foreign_keys = ON;');
   migrateRefundAudit(db);
 }
 
+resetSchema();
+
 const insertAnalyst = db.prepare('INSERT INTO analysts (id, name, role) VALUES (?, ?, ?)');
 const insertCustomer = db.prepare(`INSERT INTO customers
   (id, full_name, date_of_birth, nationality, country_of_residence, occupation, email,
    account_opened_at, expected_monthly_volume_usd, source_of_funds, id_document_type,
-   id_document_verified, address_verified, pep_flag, sanctions_hit, adverse_media_hits)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+   id_document_expires_at, id_document_verified, address_verified, pep_flag, sanctions_hit,
+   adverse_media_hits)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
 const insertCase = db.prepare(`INSERT INTO cases
   (id, reference, customer_id, status, risk_level, risk_score, assigned_to, created_at, updated_at)
   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`);
@@ -127,12 +136,11 @@ interface EventSpec {
 }
 
 function seed() {
-  resetSchema();
   const now = new Date();
   const analysts = ANALYSTS;
   const seniors = analysts.filter((a) => a.role === 'senior_analyst');
   const managers = analysts.filter((a) => a.role === 'compliance_manager');
-  const juniors = analysts;
+  const juniors = analysts.filter((a) => a.role !== 'compliance_manager');
 
   const run = db.transaction(() => {
     for (const a of analysts) insertAnalyst.run(a.id, a.name, a.role);
@@ -162,6 +170,9 @@ function seed() {
         expectedMonthlyVolumeUsd: chance(0.2) ? int(51_000, 400_000) : int(500, 49_000),
         sourceOfFunds: pick(SOURCES_OF_FUNDS),
         idDocumentType: pick(ID_DOC_TYPES),
+        idDocumentExpiresAt: new Date(
+          now.getTime() + (chance(0.2) ? int(-10, 29) : int(60, 1800)) * 86400_000,
+        ).toISOString(),
         idDocumentVerified: chance(0.82),
         addressVerified: chance(0.8),
         pepFlag: chance(0.08),
@@ -173,7 +184,8 @@ function seed() {
         customer.id, customer.fullName, customer.dateOfBirth, customer.nationality,
         customer.countryOfResidence, customer.occupation, customer.email,
         customer.accountOpenedAt, customer.expectedMonthlyVolumeUsd, customer.sourceOfFunds,
-        customer.idDocumentType, customer.idDocumentVerified ? 1 : 0,
+        customer.idDocumentType, customer.idDocumentExpiresAt,
+        customer.idDocumentVerified ? 1 : 0,
         customer.addressVerified ? 1 : 0, customer.pepFlag ? 1 : 0,
         customer.sanctionsHit ? 1 : 0, customer.adverseMediaHits,
       );

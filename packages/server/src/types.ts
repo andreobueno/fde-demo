@@ -22,6 +22,7 @@ export interface Customer {
   expectedMonthlyVolumeUsd: number;
   sourceOfFunds: string;
   idDocumentType: string;
+  idDocumentExpiresAt: string | null;
   idDocumentVerified: boolean;
   addressVerified: boolean;
   pepFlag: boolean;
@@ -110,6 +111,56 @@ export interface RiskFactor {
   severity: SignalSeverity;
   weight: number;
   contributionPct: number;
+}
+
+export type PolicyRuleCode =
+  | 'HIGH_RISK_JURISDICTION'
+  | 'SANCTIONS_HIT'
+  | 'PEP'
+  | 'DOCUMENT_EXPIRING'
+  | 'HIGH_EXPECTED_VOLUME'
+  | 'ADVERSE_MEDIA'
+  | 'ID_DOC_UNVERIFIED'
+  | 'ADDRESS_UNVERIFIED'
+  | 'OPAQUE_SOURCE_OF_FUNDS'
+  | 'NEW_ACCOUNT'
+  | 'CASH_INTENSIVE_OCCUPATION';
+
+export interface RiskThresholds {
+  medium: number;
+  high: number;
+}
+
+export interface RiskPolicy {
+  weights: Record<PolicyRuleCode, number>;
+  thresholds: RiskThresholds;
+}
+
+export interface RiskPolicyRuleView {
+  code: PolicyRuleCode;
+  title: string;
+  description: string;
+  weight: number;
+  defaultWeight: number;
+}
+
+export interface RiskPolicyView {
+  rules: RiskPolicyRuleView[];
+  thresholds: RiskThresholds;
+  defaultThresholds: RiskThresholds;
+  version: number;
+  updatedAt: string | null;
+  updatedBy: string | null;
+}
+
+export interface RiskPolicyChange {
+  id: string;
+  version: number;
+  actorId: string;
+  actorName: string;
+  changes: Array<{ key: string; from: number; to: number }>;
+  recomputedCases: number;
+  createdAt: string;
 }
 
 export interface RiskExplanation {

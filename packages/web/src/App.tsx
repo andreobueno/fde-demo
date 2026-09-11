@@ -4,6 +4,7 @@ import { AnalystSelector } from './analyst/AnalystSelector';
 import { ManualIdentityForm } from './analyst/ManualIdentityForm';
 import { CasePage } from './pages/CasePage';
 import { NotFoundPage } from './pages/NotFoundPage';
+import { RiskPolicyPage } from './pages/RiskPolicyPage';
 import { QueuePage } from './pages/QueuePage';
 import { PolicyPage } from './pages/PolicyPage';
 import { RefundQueuePage } from './pages/RefundQueuePage';
@@ -42,6 +43,18 @@ function Layout() {
   );
 }
 
+function PolicyLayout() {
+  return (
+    <>
+      <nav aria-label="KYC policy sections" style={{ display: 'flex', gap: 20, padding: '16px 24px' }}>
+        <NavLink to="/policy" end>Approval notes</NavLink>
+        <NavLink to="/policy/risk">Risk scoring</NavLink>
+      </nav>
+      <Outlet />
+    </>
+  );
+}
+
 export function App() {
   return (
     <AnalystProvider>
@@ -52,7 +65,10 @@ export function App() {
             <Route path="/cases/:id" element={<CasePage />} />
             <Route path="/refunds" element={<RefundQueuePage />} />
             <Route path="/refunds/:id" element={<RefundPage />} />
-            <Route path="/policy" element={<PolicyPage />} />
+            <Route path="/policy" element={<PolicyLayout />}>
+              <Route index element={<PolicyPage />} />
+              <Route path="risk" element={<RiskPolicyPage />} />
+            </Route>
             <Route path="*" element={<NotFoundPage />} />
           </Route>
         </Routes>

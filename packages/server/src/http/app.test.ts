@@ -307,3 +307,99 @@ describe('HTTP API', () => {
     expect(res.body.byRiskLevel.high).toBe(1);
   });
 });
+
+describe('Risk policy API', () => {
+  it('GET /api/risk-policy returns defaults with version 0', async () => {
+    const res = await authenticated().get('/api/risk-policy');
+    expect(res.status).toBe(200);
+    expect(res.body.version).toBe(0);
+    expect(res.body.thresholds).toEqual({ medium: 30, high: 60 });
+    const sanctions = res.body.rules.find((r: { code: string }) => r.code === 'SANCTIONS_HIT');
+    expect(sanctions.weight).toBe(40);
+    expect(sanctions.defaultWeight).toBe(40);
+  });
+
+  it('PUT /api/risk-policy requires the compliance_manager role', async () => {
+    const anon = await request(app).put('/api/risk-policy').send({ thresholds: { high: 70 } });
+    expect(anon.status).toBe(401);
+    const senior = await request(app)
+      .put('/api/risk-policy')
+      .set('x-analyst-id', 'ana-001')
+      .send({ thresholds: { high: 70 } });
+    expect(senior.status).toBe(403);
+    expect(senior.body.error.code).toBe('FORBIDDEN');
+  });
+
+  it('PUT /api/risk-policy rejects invalid thresholds and unknown rules', async () => {
+    const inverted = await request(app)
+      .put('/api/risk-policy')
+      .set('x-analyst-id', 'ana-006')
+      .send({ thresholds: { medium: 70, high: 60 } });
+    expect(inverted.status).toBe(400);
+    expect(inverted.body.error.code).toBe('VALIDATION_ERROR');
+    const unknown = await request(app)
+      .put('/api/risk-policy')
+      .set('x-analyst-id', 'ana-006')
+      .send({ weights: { BOGUS: 5 } });
+    expect(unknown.status).toBe(400);
+    const outOfRange = await request(app)
+      .put('/api/risk-policy')
+      .set('x-analyst-id', 'ana-006')
+      .send({ weights: { PEP: 101 } });
+    expect(outOfRange.status).toBe(400);
+  });
+
+  it('PUT /api/risk-policy persists, logs history and re-scores open cases only', async () => {
+    // c-1 (pending) and c-2 (in_review) customers are clean → score 0 under any weights.
+    db.prepare("UPDATE customers SET pep_flag = 1 WHERE id IN ('c-1-cust', 'c-3-cust')").run();
+
+    const res = await request(app)
+      .put('/api/risk-policy')
+      .set('x-analyst-id', 'ana-006')
+      .send({ weights: { PEP: 65 }, thresholds: { high: 65 } });
+    expect(res.status).toBe(200);
+    expect(res.body.policy.version).toBe(1);
+    expect(res.body.policy.updatedBy).toBe('Sofia Chen');
+    expect(res.body.change.changes).toEqual([
+      { key: 'weights.PEP', from: 30, to: 65 },
+      { key: 'thresholds.high', from: 60, to: 65 },
+    ]);
+    // c-1: 70 → 65 (high stays high, score changed); c-2: 40 → 0 (medium → low); c-3 closed.
+    expect(res.body.change.recomputedCases).toBe(2);
+
+    const c1 = await authenticated().get('/api/cases/c-1');
+    expect(c1.body.riskScore).toBe(65);
+    expect(c1.body.riskLevel).toBe('high');
+    expect(c1.body.signals.map((s: { code: string }) => s.code)).toEqual(['PEP']);
+    const lastEvent = c1.body.audit[c1.body.audit.length - 1];
+    expect(lastEvent.action).toBe('RISK_RESCORED');
+    expect(lastEvent.fromStatus).toBe('pending');
+    expect(lastEvent.toStatus).toBe('pending');
+    expect(verifyChain(c1.body.audit)).toBe(true);
+
+    const c3 = await authenticated().get('/api/cases/c-3');
+    expect(c3.body.riskScore).toBe(5);
+    expect(c3.body.audit).toHaveLength(1);
+
+    const explanation = await authenticated().get('/api/cases/c-1/risk-explanation');
+    expect(explanation.body.thresholds).toEqual({ medium: 30, high: 65 });
+
+    const history = await authenticated().get('/api/risk-policy/history');
+    expect(history.body).toHaveLength(1);
+    expect(history.body[0].version).toBe(1);
+
+    const policy = await authenticated().get('/api/risk-policy');
+    expect(policy.body.version).toBe(1);
+    expect(policy.body.rules.find((r: { code: string }) => r.code === 'PEP').weight).toBe(65);
+  });
+
+  it('PUT /api/risk-policy with no effective change is a no-op', async () => {
+    const res = await request(app)
+      .put('/api/risk-policy')
+      .set('x-analyst-id', 'ana-006')
+      .send({ weights: { PEP: 30 } });
+    expect(res.status).toBe(200);
+    expect(res.body.change).toBeNull();
+    expect(res.body.policy.version).toBe(0);
+  });
+});

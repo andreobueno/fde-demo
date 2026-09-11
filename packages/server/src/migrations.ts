@@ -1,5 +1,14 @@
 import type { Db } from './db.js';
 
+export function migrateRiskPolicy(db: Db): void {
+  db.transaction(() => {
+    const customerColumns = db.prepare<[], { name: string }>('PRAGMA table_info(customers)').all();
+    if (!customerColumns.some((column) => column.name === 'id_document_expires_at')) {
+      db.exec('ALTER TABLE customers ADD COLUMN id_document_expires_at TEXT');
+    }
+  }).immediate();
+}
+
 export function migrateRefundAudit(db: Db): void {
   db.transaction(() => {
     const columns = db.prepare<[], { name: string }>('PRAGMA table_info(audit_events)').all();

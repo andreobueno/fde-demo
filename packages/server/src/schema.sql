@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS customers (
   expected_monthly_volume_usd REAL NOT NULL,
   source_of_funds TEXT NOT NULL,
   id_document_type TEXT NOT NULL,
+  id_document_expires_at TEXT,
   id_document_verified INTEGER NOT NULL,
   address_verified INTEGER NOT NULL,
   pep_flag INTEGER NOT NULL,
@@ -33,6 +34,12 @@ CREATE TABLE IF NOT EXISTS cases (
   assigned_to TEXT REFERENCES analysts(id),
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS case_risk_thresholds (
+  case_id TEXT PRIMARY KEY REFERENCES cases(id),
+  medium INTEGER NOT NULL CHECK (medium BETWEEN 1 AND 99),
+  high INTEGER NOT NULL CHECK (high > medium AND high <= 100)
 );
 
 CREATE TABLE IF NOT EXISTS risk_signals (
@@ -88,6 +95,40 @@ CREATE TABLE IF NOT EXISTS audit_events (
   UNIQUE (case_id, sequence),
   UNIQUE (refund_id, sequence)
 );
+
+CREATE TABLE IF NOT EXISTS risk_policy (
+  key TEXT PRIMARY KEY,
+  value INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS risk_policy_changes (
+  id TEXT PRIMARY KEY,
+  version INTEGER NOT NULL UNIQUE,
+  actor_id TEXT NOT NULL,
+  actor_name TEXT NOT NULL,
+  changes TEXT NOT NULL,
+  recomputed_cases INTEGER NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE TRIGGER IF NOT EXISTS risk_policy_changes_no_update
+BEFORE UPDATE ON risk_policy_changes
+BEGIN
+  SELECT RAISE(ABORT, 'risk_policy_changes is append-only');
+END;
+
+CREATE TRIGGER IF NOT EXISTS risk_policy_changes_no_delete
+BEFORE DELETE ON risk_policy_changes
+BEGIN
+  SELECT RAISE(ABORT, 'risk_policy_changes is append-only');
+END;
+
+CREATE TRIGGER IF NOT EXISTS risk_policy_changes_no_replace
+BEFORE INSERT ON risk_policy_changes
+WHEN EXISTS (SELECT 1 FROM risk_policy_changes WHERE id = NEW.id OR version = NEW.version)
+BEGIN
+  SELECT RAISE(ABORT, 'risk_policy_changes is append-only');
+END;
 
 CREATE TRIGGER IF NOT EXISTS audit_events_no_update
 BEFORE UPDATE ON audit_events

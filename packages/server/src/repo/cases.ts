@@ -1,5 +1,6 @@
 import type { Db } from '../db.js';
-import type { CaseStatus, KycCase, RiskLevel } from '../types.js';
+import type { CaseStatus, KycCase, RiskLevel, RiskThresholds } from '../types.js';
+import { DEFAULT_THRESHOLDS } from '../domain/riskPolicy.js';
 import { rowToKycCase } from './mappers.js';
 
 const CASE_SELECT = `
@@ -103,6 +104,39 @@ export function updateCaseStatus(
     updatedAt,
     id,
   );
+}
+
+export function listOpenCases(db: Db): KycCase[] {
+  return db
+    .prepare(`${CASE_SELECT} WHERE c.status IN ('pending', 'in_review', 'escalated') ORDER BY c.id`)
+    .all()
+    .map(rowToKycCase);
+}
+
+export function updateCaseRisk(
+  db: Db,
+  id: string,
+  riskScore: number,
+  riskLevel: RiskLevel,
+  updatedAt: string,
+  thresholds: RiskThresholds,
+): void {
+  db.prepare('UPDATE cases SET risk_score = ?, risk_level = ?, updated_at = ? WHERE id = ?').run(
+    riskScore,
+    riskLevel,
+    updatedAt,
+    id,
+  );
+  db.prepare(`INSERT INTO case_risk_thresholds (case_id, medium, high) VALUES (?, ?, ?)
+    ON CONFLICT(case_id) DO UPDATE SET medium = excluded.medium, high = excluded.high`)
+    .run(id, thresholds.medium, thresholds.high);
+}
+
+export function getCaseRiskThresholds(db: Db, id: string): RiskThresholds {
+  const row = db.prepare<[string], RiskThresholds>(
+    'SELECT medium, high FROM case_risk_thresholds WHERE case_id = ?',
+  ).get(id);
+  return row ?? { ...DEFAULT_THRESHOLDS };
 }
 
 export function caseStats(db: Db): {

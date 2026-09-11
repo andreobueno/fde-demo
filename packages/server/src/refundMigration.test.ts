@@ -46,7 +46,8 @@ function legacyDb(filename: string): Db {
   const legacy = new Database(filename);
   legacy.pragma('foreign_keys = ON');
   legacy.pragma('recursive_triggers = ON');
-  legacy.exec(schemaSql().split('CREATE TABLE IF NOT EXISTS refunds')[0]!);
+  legacy.exec(schemaSql().split('CREATE TABLE IF NOT EXISTS refunds')[0]!
+    .replace('  id_document_expires_at TEXT,\n', ''));
   legacy.exec(LEGACY_AUDIT);
   legacy.exec(`
     INSERT INTO analysts VALUES ('ana-001', 'Historical Senior', 'senior_analyst');

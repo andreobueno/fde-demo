@@ -20,6 +20,7 @@ afterEach(() => {
 function legacyDatabase(filename: string): Db {
   const legacy = new Database(filename);
   legacy.exec(schemaSql().split('CREATE TABLE IF NOT EXISTS review_policy')[0]!
+    .replace('  id_document_expires_at TEXT,\n', '')
     .replace("'analyst', 'senior_analyst', 'compliance_manager'", "'analyst', 'senior_analyst'")
     .replace('case_id TEXT REFERENCES cases(id)', 'case_id TEXT NOT NULL REFERENCES cases(id)')
     .replace('  refund_id TEXT REFERENCES refunds(id),\n', '')

@@ -132,7 +132,7 @@ Refund endpoints are under `/api/refunds`; see [the API contract](docs/REFUNDS_A
 
 ## Risk scoring model
 
-Deterministic: score = sum of triggered signal weights, clamped to 0–100. Level: `< 30` low, `30–59` medium, `≥ 60` high.
+Deterministic: score = sum of triggered signal weights, clamped to 0–100. Level: `< medium` low, `medium..high-1` medium, `≥ high` high. Weights and thresholds are **configuration, not code** — see [Risk policy](#risk-policy). Defaults:
 
 The prototype deliberately uses deterministic explanations. A production implementation could augment this with an LLM, but the system should retain structured evidence and deterministic policy evaluation as the source of truth.
 
@@ -140,20 +140,40 @@ This evaluation intentionally tests the AI-assisted layer over a working workflo
 
 That follows the same architectural direction as [Microsoft 365 Copilot over Dataverse](https://learn.microsoft.com/en-us/power-apps/maker/data-platform/data-platform-data-copilot): assistance sits over governed application data and respects the underlying access model. This prototype tests that seam with a deterministic explanation first, rather than pretending AI replaces the workflow.
 
-| Code | Weight | Trigger |
+| Code | Default weight | Trigger |
 | --- | --- | --- |
-| `SANCTIONS_HIT` | 60 | Customer matches a sanctions list |
-| `PEP` | 35 | Politically exposed person |
+| `SANCTIONS_HIT` | 40 | Customer matches a sanctions list |
+| `PEP` | 30 | Politically exposed person |
 | `HIGH_RISK_JURISDICTION` | 25 | Residence or nationality in the high-risk list |
 | `ADVERSE_MEDIA` | 10 per hit (max 30) | Adverse media hits |
 | `ID_DOC_UNVERIFIED` | 20 | ID document not verified |
-| `HIGH_EXPECTED_VOLUME` | 15 | Expected volume > 50k USD/month |
+| `DOCUMENT_EXPIRING` | 10 | ID document expires in < 30 days |
+| `HIGH_EXPECTED_VOLUME` | 15 | Unusual transaction volume (> 50k USD/month expected) |
 | `OPAQUE_SOURCE_OF_FUNDS` | 15 | Source of funds is `crypto`, `cash_intensive_business` or `unknown` |
 | `ADDRESS_UNVERIFIED` | 10 | Address not verified |
 | `CASH_INTENSIVE_OCCUPATION` | 10 | Cash-intensive occupation |
 | `NEW_ACCOUNT` | 5 | Account opened < 30 days ago |
 
 The explanation endpoint ranks the recorded case signals, identifies the primary driver and reports each factor's `contributionPct` relative to the raw signal total. The case page keeps descriptions and evidence-record IDs behind **View supporting evidence**. If the raw total exceeds 100, the displayed risk score remains capped at 100 while the explanation shows the uncapped total.
+
+## Risk policy
+
+The **KYC policy** navigation has two independent sections: **Approval notes** (`/policy`) and
+**Risk scoring** (`/policy/risk`). Each has its own settings, version and history. Both use the
+same identity and permission checks; neither changes refund policy.
+
+Risk scoring shows every rule with its current and default weight plus the medium/high thresholds
+(default 30 / 60). A `compliance_manager` can edit them; analysts and senior analysts see the page
+read-only. Saving calls `PUT /api/risk-policy`, which:
+
+- validates the patch (weights 0–100, thresholds 1–100, `medium < high`; unknown rule codes are rejected),
+- persists the new values in `risk_policy` and appends a versioned row to the append-only `risk_policy_changes` table,
+- re-scores every **open** case (`pending`, `in_review`, `escalated`) inside the same transaction and appends a `RISK_RESCORED` audit event whenever its saved score, level, evidence or thresholds change; closed cases retain their saved evaluation,
+- returns the new policy and the change record (`recomputedCases`).
+
+`GET /api/risk-policy` and `GET /api/risk-policy/history` require a known demo identity. No deploy
+or code change is needed to change the rules. Explanation reads use saved evidence and the
+thresholds captured during evaluation, never today's clock or a newer policy.
 
 ## Audit hash chain
 
@@ -171,7 +191,7 @@ Refunds use the same hash function, substituting `refundId` for `caseId` at the 
 canonical JSON. Existing KYC hash input and stored hashes remain unchanged. Refund changes and
 their audit appends also commit or roll back together.
 
-Hash verification detects altered hashed fields and broken links. It cannot detect deletion of the chain tail or a privileged rewrite of the whole database, and the legacy case hash does not cover actor display names. Policy changes have a separate hash chain covering actor ID/name/role, reason and complete previous/new policy snapshots. Both chains remain in the operational database; external immutable storage and chain anchoring are production requirements.
+Hash verification detects altered hashed fields and broken links. It cannot detect deletion of the chain tail or a privileged rewrite of the whole database, and the legacy case hash does not cover actor display names. Approval-note changes have a separate hash chain covering actor ID/name/role, reason and complete previous/new policy snapshots. Risk-scoring changes retain a versioned, append-only field-difference history without a hash chain. All histories remain in the operational database; external immutable storage and chain anchoring are production requirements.
 
 ## Identity model
 
@@ -205,7 +225,12 @@ The API returns `allowedActions` from the same role/risk/state rules used to aut
 
 ## Policy and existing databases
 
-The Policy page controls whether low/medium approvals need a justification. Managers must provide a change reason and the current version; concurrent edits return `409 POLICY_CONFLICT`. Policy cannot relax high-risk role or note requirements. Every accepted policy update is audited in the same transaction.
+The Approval notes section retains `GET/PUT /api/policy` and `GET /api/policy/audit`. Managers
+must provide a change reason and the current version; concurrent edits return `409 POLICY_CONFLICT`.
+Approval-note updates cannot relax high-risk role or note requirements and never rescore cases.
+Risk scoring uses a separate partial-update contract and version history; concurrent risk edits
+are serialized, with the last write to a setting taking effect. Every accepted policy change and
+its audit writes commit together.
 
 Startup upgrades the old analyst-role constraint, creates the default policy, and extends the
 audit table to support refund subjects while preserving existing rows and hashes. Back up the
@@ -213,6 +238,11 @@ database before upgrades. Existing databases do not automatically gain a manager
 one through trusted administrative access or use a separate freshly seeded demo database.
 `npm run seed` remains a **destructive demo reset**, including policy and refund history; never use
 it to migrate retained records.
+
+Startup also adds document expiry storage and a separate table for saved scoring thresholds.
+Legacy cases without a threshold snapshot use the original 30/60 defaults until rescored.
+Historical custom thresholds from versions predating snapshots cannot be reliably recovered;
+production would require complete versioned evaluation snapshots.
 
 See [authorization and audit hardening](docs/SECURITY_REVIEW.md) for the before/after assessment, test coverage and remaining production work.
 

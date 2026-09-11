@@ -10,8 +10,11 @@ import {
   getPolicy,
   getPolicyAudit,
   getRiskExplanation,
+  getRiskPolicy,
+  getRiskPolicyHistory,
   listCases,
   postCaseAction,
+  putRiskPolicy,
   updatePolicy,
 } from './client';
 import type { Policy, PolicyAuditEvent } from './types';
@@ -51,6 +54,9 @@ describe('explicit demo identity on every API request', () => {
     { path: '/api/policy', method: 'GET', request: getPolicy },
     { path: '/api/policy/audit', method: 'GET', request: getPolicyAudit },
     { path: '/api/policy', method: 'PUT', request: (id, signal) => updatePolicy(update, id, signal) },
+    { path: '/api/risk-policy', method: 'GET', request: getRiskPolicy },
+    { path: '/api/risk-policy/history', method: 'GET', request: getRiskPolicyHistory },
+    { path: '/api/risk-policy', method: 'PUT', request: (id, signal) => putRiskPolicy({ thresholds: { high: 70 } }, id, signal) },
   ];
 
   it.each(endpoints)('$method $path uses the supplied identity and cancellation signal', async ({ request, path, method }) => {

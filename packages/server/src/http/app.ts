@@ -9,17 +9,20 @@ import { z } from 'zod';
 import type { Db } from '../db.js';
 import { ApiError, notFound, unauthorized } from '../errors.js';
 import { explainRisk } from '../domain/risk.js';
+import { policyPatchSchema } from '../domain/riskPolicy.js';
 import { getAllowedActions, actionBodySchema } from '../domain/transitions.js';
 import { hasPermission, permissionsFor, type Permission } from '../domain/authorization.js';
 import { approvalNoteRequired, policyUpdateSchema } from '../domain/policy.js';
 import { getAnalyst, listAnalysts } from '../repo/analysts.js';
-import { CASE_SORTS, caseStats, getCase, listCases } from '../repo/cases.js';
+import { CASE_SORTS, caseStats, getCase, getCaseRiskThresholds, listCases } from '../repo/cases.js';
 import { getCustomer } from '../repo/customers.js';
 import { listAuditEvents } from '../repo/audit.js';
 import { listSignals } from '../repo/signals.js';
+import { listPolicyChanges } from '../repo/riskPolicy.js';
 import { applyCaseAction } from '../services/caseService.js';
 import { updatePolicy } from '../services/policyService.js';
 import { getPolicy, listPolicyAuditEvents } from '../repo/policy.js';
+import { getRiskPolicyView, updateRiskPolicy } from '../services/riskPolicyService.js';
 import type { Analyst } from '../types.js';
 import { refundRoutes } from './refunds.js';
 
@@ -164,7 +167,24 @@ export function createApp(db: Db): Express {
     if (!kase) return next(notFound(`Case '${caseId}' not found.`));
     const customer = getCustomer(db, kase.customerId);
     if (!customer) return next(notFound(`Customer '${kase.customerId}' not found.`));
-    res.json(explainRisk(kase, listSignals(db, kase.id)));
+    res.json(explainRisk(kase, listSignals(db, kase.id), getCaseRiskThresholds(db, kase.id)));
+  });
+
+  app.get('/api/risk-policy', requirePermission('policy:read'), (_req, res) => {
+    res.json(getRiskPolicyView(db));
+  });
+
+  app.get('/api/risk-policy/history', requirePermission('audit:read'), (_req, res) => {
+    res.json(listPolicyChanges(db));
+  });
+
+  app.put('/api/risk-policy', requirePermission('policy:manage'), (req, res, next) => {
+    if (!req.analyst) return next(unauthorized('No analyst context available.'));
+    const parsed = policyPatchSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return next(new ApiError(400, 'VALIDATION_ERROR', 'Invalid policy body.', parsed.error.issues));
+    }
+    res.json(updateRiskPolicy(db, req.analyst.id, parsed.data));
   });
 
   app.get('/api/cases/:id/audit', requirePermission('audit:read'), (req, res, next) => {

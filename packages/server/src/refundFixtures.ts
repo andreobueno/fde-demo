@@ -17,7 +17,11 @@ export function refundFixtureContext(db: Db): void {
   for (const actor of Object.values(REFUND_ACTORS)) {
     db.prepare('INSERT INTO analysts VALUES (?, ?, ?)').run(actor.id, actor.name, actor.role);
   }
-  const insert = db.prepare(`INSERT INTO customers VALUES
+  const insert = db.prepare(`INSERT INTO customers (
+    id, full_name, date_of_birth, nationality, country_of_residence, occupation, email,
+    account_opened_at, expected_monthly_volume_usd, source_of_funds, id_document_type,
+    id_document_verified, address_verified, pep_flag, sanctions_hit, adverse_media_hits
+  ) VALUES
     (?, ?, '1990-01-01', 'US', 'US', 'teacher', ?, '2020-01-01', 1000,
      'salary', 'passport', 1, 1, 0, 0, 0)`);
   insert.run('cus-001', 'Avery Fiction', 'avery.fiction@example-mail.com');

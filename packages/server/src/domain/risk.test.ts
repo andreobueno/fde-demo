@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { computeRisk, explainRisk } from './risk.js';
 import type { Customer, RiskSignal } from '../types.js';
+import { DEFAULT_RISK_POLICY } from './riskPolicy.js';
 
 const NOW = new Date('2026-06-01T00:00:00Z');
 
@@ -17,6 +18,7 @@ function baseCustomer(overrides: Partial<Customer> = {}): Customer {
     expectedMonthlyVolumeUsd: 5000,
     sourceOfFunds: 'salary',
     idDocumentType: 'passport',
+    idDocumentExpiresAt: '2030-01-01T00:00:00Z',
     idDocumentVerified: true,
     addressVerified: true,
     pepFlag: false,
@@ -58,8 +60,11 @@ describe('computeRisk', () => {
     );
     expect(med.score).toBe(30);
     expect(med.level).toBe('medium');
-    // 60 → high
-    const high = computeRisk(baseCustomer({ sanctionsHit: true }), NOW);
+    // 40 + 20 = 60 → high
+    const high = computeRisk(
+      baseCustomer({ sanctionsHit: true, idDocumentVerified: false }),
+      NOW,
+    );
     expect(high.score).toBe(60);
     expect(high.level).toBe('high');
     // 29 → low
@@ -72,10 +77,12 @@ describe('computeRisk', () => {
   });
 
   it.each([
-    ['SANCTIONS_HIT', { sanctionsHit: true }, 60],
-    ['PEP', { pepFlag: true }, 35],
     ['HIGH_RISK_JURISDICTION', { countryOfResidence: 'IR' }, 25],
     ['ADVERSE_MEDIA', { adverseMediaHits: 4 }, 30],
+    ['SANCTIONS_HIT', { sanctionsHit: true }, 40],
+    ['PEP', { pepFlag: true }, 30],
+    ['DOCUMENT_EXPIRING', { idDocumentExpiresAt: '2026-06-15T00:00:00Z' }, 10],
+    ['DOCUMENT_EXPIRING', { idDocumentExpiresAt: '2026-05-01T00:00:00Z' }, 10],
     ['ID_DOC_UNVERIFIED', { idDocumentVerified: false }, 20],
     ['ADDRESS_UNVERIFIED', { addressVerified: false }, 10],
     ['HIGH_EXPECTED_VOLUME', { expectedMonthlyVolumeUsd: 50_001 }, 15],
@@ -94,6 +101,8 @@ describe('computeRisk', () => {
     ['CASH_INTENSIVE_OCCUPATION', { occupation: 'teacher' }],
     ['NEW_ACCOUNT', { accountOpenedAt: '2020-01-01T00:00:00Z' }],
     ['OPAQUE_SOURCE_OF_FUNDS', { sourceOfFunds: 'salary' }],
+    ['DOCUMENT_EXPIRING', { idDocumentExpiresAt: '2026-07-15T00:00:00Z' }],
+    ['DOCUMENT_EXPIRING', { idDocumentExpiresAt: null }],
   ] as const)('signal %s does not fire', (code, overrides) => {
     const r = computeRisk(baseCustomer(overrides as Partial<Customer>), NOW);
     expect(r.signals.find((x) => x.code === code)).toBeUndefined();
@@ -160,6 +169,20 @@ describe('computeRisk', () => {
   it('is deterministic', () => {
     const c = baseCustomer({ pepFlag: true, adverseMediaHits: 2 });
     expect(computeRisk(c, NOW)).toEqual(computeRisk(c, NOW));
+  });
+
+  it('honours a custom policy for weights and thresholds', () => {
+    const policy = {
+      ...DEFAULT_RISK_POLICY,
+      weights: { ...DEFAULT_RISK_POLICY.weights, SANCTIONS_HIT: 80, PEP: 0 },
+      thresholds: { medium: 10, high: 50 },
+    };
+    const r = computeRisk(baseCustomer({ sanctionsHit: true, pepFlag: true }), NOW, policy);
+    expect(r.score).toBe(80);
+    expect(r.level).toBe('high');
+    expect(r.signals.map((s) => s.code)).toEqual(['SANCTIONS_HIT']);
+    const low = computeRisk(baseCustomer({ addressVerified: false }), NOW, policy);
+    expect(low.level).toBe('medium');
   });
 });
 

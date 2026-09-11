@@ -27,7 +27,7 @@ export function PolicyPage() {
   return (
     <div className={styles.page}>
       <Link to="/" className={styles.back}>← Back to queue</Link>
-      <div className={styles.header}><h1>Review policy</h1></div>
+      <div className={styles.header}><h1>Approval-note policy</h1></div>
       <section className={styles.section}>
         <h2>Approval justification</h2>
         <p>High-risk approvals always require a note of 10–1000 characters.</p>

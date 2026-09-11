@@ -63,6 +63,7 @@ export interface Customer {
   expectedMonthlyVolumeUsd: number;
   sourceOfFunds: string;
   idDocumentType: string;
+  idDocumentExpiresAt: string | null;
   idDocumentVerified: boolean;
   addressVerified: boolean;
   pepFlag: boolean;
@@ -155,6 +156,48 @@ export interface ActionResponse extends KycCase {
   audit: AuditEvent[];
   allowedActions: CaseAction[];
   approvalNoteRequired: boolean;
+}
+
+export interface RiskThresholds {
+  medium: number;
+  high: number;
+}
+
+export interface RiskPolicyRule {
+  code: string;
+  title: string;
+  description: string;
+  weight: number;
+  defaultWeight: number;
+}
+
+export interface RiskPolicy {
+  rules: RiskPolicyRule[];
+  thresholds: RiskThresholds;
+  defaultThresholds: RiskThresholds;
+  version: number;
+  updatedAt: string | null;
+  updatedBy: string | null;
+}
+
+export interface RiskPolicyChange {
+  id: string;
+  version: number;
+  actorId: string;
+  actorName: string;
+  changes: Array<{ key: string; from: number; to: number }>;
+  recomputedCases: number;
+  createdAt: string;
+}
+
+export interface RiskPolicyPatch {
+  weights?: Record<string, number>;
+  thresholds?: Partial<RiskThresholds>;
+}
+
+export interface RiskPolicyUpdateResponse {
+  policy: RiskPolicy;
+  change: RiskPolicyChange | null;
 }
 
 export interface ApiErrorBody {
