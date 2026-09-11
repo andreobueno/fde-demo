@@ -1,0 +1,30 @@
+[
+  {
+    "id": "cd3f08fa-f461-49e2-879a-d2ead9ace47f",
+    "caseId": "case-006",
+    "sequence": 1,
+    "actorId": "ana-005",
+    "actorName": "Ines Morales",
+    "action": "CASE_CREATED",
+    "fromStatus": null,
+    "toStatus": "pending",
+    "note": "Case created from onboarding pipeline.",
+    "createdAt": "2026-09-04T15:17:54.710Z",
+    "prevHash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "hash": "313ef76210a9a54b507c7e3b1a9b29e4728f18c495bc78fdd0822a3a45320578"
+  },
+  {
+    "id": "008bfa14-826a-4f4c-9d19-09d117ef6180",
+    "caseId": "case-006",
+    "sequence": 2,
+    "actorId": "ana-003",
+    "actorName": "Grete Lindholm",
+    "action": "start_review",
+    "fromStatus": "pending",
+    "toStatus": "in_review",
+    "note": "Starting review; requesting additional documentation.",
+    "createdAt": "2026-09-04T16:17:54.710Z",
+    "prevHash": "313ef76210a9a54b507c7e3b1a9b29e4728f18c495bc78fdd0822a3a45320578",
+    "hash": "59f433738c013f96b6a0b1d5eca09918b2424562380ff72721249e4d9a1bfe78"
+  }
+]

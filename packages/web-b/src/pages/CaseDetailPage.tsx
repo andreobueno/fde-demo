@@ -1,0 +1,157 @@
+import { Link, useParams } from 'react-router-dom';
+import { useAnalysts, useCase } from '@/api/queries';
+import { ApiRequestError } from '@/api/client';
+import { formatDate, formatDateTime, formatUsd, yesNo } from '@/lib/format';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { AuditTimeline } from '@/components/AuditTimeline';
+import { CaseActions } from '@/components/CaseActions';
+import { RiskPanel } from '@/components/RiskPanel';
+import {
+  ErrorState,
+  EmptyState,
+  LoadingState,
+  RiskBadge,
+  StatusBadge,
+  VerifyIcon,
+} from '@/components/common';
+export function CaseDetailPage() {
+  const { id = '' } = useParams();
+  const query = useCase(id);
+  const { data: analysts = [] } = useAnalysts();
+  if (query.isLoading) return <LoadingState />;
+  if (query.isError && query.error instanceof ApiRequestError && query.error.status === 404)
+    return <NotFoundContent />;
+  if (query.isError || !query.data)
+    return (
+      <ErrorState
+        message={query.error instanceof Error ? query.error.message : 'Unable to load case'}
+        retry={() => void query.refetch()}
+      />
+    );
+  const c = query.data;
+  const assignee = analysts.find((a) => a.id === c.assignedTo)?.name ?? c.assignedTo ?? '—';
+  const customerFields = [
+    { label: 'Full name', value: c.customer.fullName },
+    { label: 'Date of birth', value: formatDate(c.customer.dateOfBirth) },
+    { label: 'Nationality', value: c.customer.nationality },
+    { label: 'Country of residence', value: c.customer.countryOfResidence },
+    { label: 'Occupation', value: c.customer.occupation },
+    { label: 'Email', value: c.customer.email },
+    { label: 'Account opened', value: formatDate(c.customer.accountOpenedAt) },
+    { label: 'Expected monthly volume', value: formatUsd(c.customer.expectedMonthlyVolumeUsd) },
+    { label: 'Source of funds', value: c.customer.sourceOfFunds },
+    { label: 'ID document type', value: c.customer.idDocumentType },
+    { label: 'ID document verified', value: <VerifyIcon value={c.customer.idDocumentVerified} /> },
+    { label: 'Address verified', value: <VerifyIcon value={c.customer.addressVerified} /> },
+    {
+      label: 'PEP flag',
+      value: (
+        <span className={c.customer.pepFlag ? 'text-red-600' : ''}>
+          {yesNo(c.customer.pepFlag)}
+        </span>
+      ),
+    },
+    {
+      label: 'Sanctions hit',
+      value: (
+        <span className={c.customer.sanctionsHit ? 'text-red-600' : ''}>
+          {yesNo(c.customer.sanctionsHit)}
+        </span>
+      ),
+    },
+    { label: 'Adverse media hits', value: String(c.customer.adverseMediaHits) },
+  ];
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <Link to="/" className="text-sm text-slate-500 hover:text-slate-900">
+            ← Back to queue
+          </Link>
+          <div className="mt-2 flex flex-wrap items-center gap-3">
+            <h1 className="text-2xl font-semibold">{c.reference}</h1>
+            <StatusBadge status={c.status} />
+            <RiskBadge risk={c.riskLevel} />
+            <span className="text-sm text-slate-500">Score {c.riskScore}</span>
+          </div>
+          <p className="mt-2 text-sm text-slate-500">
+            Assigned to {assignee} · Created {formatDateTime(c.createdAt)} · Updated{' '}
+            {formatDateTime(c.updatedAt)}
+          </p>
+        </div>
+        {c.allowedActions.length ? (
+          <CaseActions
+            id={c.id}
+            reference={c.reference}
+            allowedActions={c.allowedActions}
+            riskLevel={c.riskLevel}
+          />
+        ) : (
+          <div className="rounded-md bg-slate-100 px-4 py-3 text-sm text-slate-600">
+            Case closed — no further actions available
+          </div>
+        )}
+      </div>
+      <div className="grid gap-6 lg:grid-cols-3">
+        <div className="space-y-6 lg:col-span-2">
+          <Card>
+            <CardHeader>
+              <CardTitle>Customer information</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <dl className="grid gap-x-6 gap-y-4 sm:grid-cols-2">
+                {customerFields.map(({ label, value }) => (
+                  <div key={label}>
+                    <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                      {label}
+                    </dt>
+                    <dd className="mt-1 text-sm">{value}</dd>
+                  </div>
+                ))}
+              </dl>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle>Risk signals</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {c.signals.length ? (
+                <div className="space-y-4">
+                  {c.signals.map((signal) => (
+                    <div className="border-b pb-4 last:border-0 last:pb-0" key={signal.id}>
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="font-medium">{signal.title}</p>
+                        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs capitalize">
+                          {signal.severity}
+                        </span>
+                      </div>
+                      <p className="mt-1 text-sm text-slate-600">{signal.description}</p>
+                      <p className="mt-1 text-xs text-slate-500">Weight {signal.weight}</p>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <EmptyState message="No risk signals" />
+              )}
+            </CardContent>
+          </Card>
+          <AuditTimeline events={c.audit} />
+        </div>
+        <div>
+          <RiskPanel id={c.id} riskLevel={c.riskLevel} />
+        </div>
+      </div>
+    </div>
+  );
+}
+export function NotFoundContent() {
+  return (
+    <div className="flex min-h-64 flex-col items-center justify-center gap-3">
+      <h1 className="text-xl font-semibold">Case not found</h1>
+      <Link to="/" className="text-sm text-blue-700 hover:underline">
+        Back to queue
+      </Link>
+    </div>
+  );
+}
