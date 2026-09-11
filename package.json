@@ -1,0 +1,15 @@
+{
+  "name": "kyc-review-console",
+  "private": true,
+  "version": "0.0.0",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:server": "npm run dev -w packages/server",
+    "seed": "npm run seed -w packages/server",
+    "test": "npm run test -w packages/server",
+    "lint": "npm run lint -w packages/server",
+    "typecheck": "npm run typecheck -w packages/server"
+  }
+}
