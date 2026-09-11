@@ -5,6 +5,7 @@ import type {
   RiskLevel,
   RiskPolicy,
   RiskSignal,
+  RiskThresholds,
   SignalSeverity,
 } from '../types.js';
 import { DEFAULT_RISK_POLICY, ruleDef } from './policy.js';
@@ -104,15 +105,14 @@ export function computeRisk(
   }
 
   if (customer.idDocumentExpiresAt) {
-    const daysToExpiry = Math.floor(
-      (new Date(customer.idDocumentExpiresAt).getTime() - now.getTime()) / DAY_MS,
-    );
-    if (daysToExpiry < DOCUMENT_EXPIRING_DAYS) {
+    const deltaDays =
+      (new Date(customer.idDocumentExpiresAt).getTime() - now.getTime()) / DAY_MS;
+    if (deltaDays < DOCUMENT_EXPIRING_DAYS) {
       fire(
         'DOCUMENT_EXPIRING',
-        daysToExpiry < 0
-          ? `ID document expired ${-daysToExpiry} day(s) ago.`
-          : `ID document expires in ${daysToExpiry} day(s) (< ${DOCUMENT_EXPIRING_DAYS} days).`,
+        deltaDays < 0
+          ? `ID document expired ${Math.floor(-deltaDays)} day(s) ago.`
+          : `ID document expires in ${Math.floor(deltaDays)} day(s) (< ${DOCUMENT_EXPIRING_DAYS} days).`,
       );
     }
   }
@@ -178,13 +178,25 @@ export function explainRisk(
   policy: RiskPolicy = DEFAULT_RISK_POLICY,
 ): RiskExplanation {
   const { score, level, signals } = computeRisk(customer, now, policy);
+  return explainAssessment(caseId, score, level, signals, policy.thresholds);
+}
+
+/** Explains an already-computed (persisted) assessment without re-scoring it. */
+export function explainAssessment(
+  caseId: string,
+  score: number,
+  level: RiskLevel,
+  signals: Signal[],
+  thresholds: RiskThresholds,
+): RiskExplanation {
+  const rawTotal = signals.reduce((sum, s) => sum + s.weight, 0);
   const factors = signals.map((s) => ({
     code: s.code,
     title: s.title,
     description: s.description,
     severity: s.severity,
     weight: s.weight,
-    contributionPct: score === 0 ? 0 : Math.round((s.weight / score) * 100),
+    contributionPct: rawTotal === 0 ? 0 : Math.round((s.weight / rawTotal) * 100),
   }));
 
   const summary =
@@ -197,7 +209,7 @@ export function explainRisk(
     riskScore: score,
     riskLevel: level,
     summary,
-    thresholds: { ...policy.thresholds },
+    thresholds: { ...thresholds },
     factors,
   };
 }

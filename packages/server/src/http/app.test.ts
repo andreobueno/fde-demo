@@ -297,6 +297,12 @@ describe('Risk policy API', () => {
     const c3 = await request(app).get('/api/cases/c-3');
     expect(c3.body.riskScore).toBe(5);
     expect(c3.body.audit).toHaveLength(1);
+    // Closed case: explanation describes the persisted assessment, not a fresh score.
+    const c3Explanation = await request(app).get('/api/cases/c-3/risk-explanation');
+    expect(c3Explanation.body.riskScore).toBe(5);
+    expect(c3Explanation.body.factors.map((f: { code: string }) => f.code)).toEqual(
+      c3.body.signals.map((s: { code: string }) => s.code),
+    );
 
     const explanation = await request(app).get('/api/cases/c-1/risk-explanation');
     expect(explanation.body.thresholds).toEqual({ medium: 30, high: 65 });
