@@ -196,7 +196,7 @@ read-only. Saving calls `PUT /api/risk-policy`, which:
 - re-scores every **open** case (`pending`, `in_review`, `escalated`) inside the same transaction and appends a `RISK_RESCORED` audit event whenever its saved score, level, evidence or thresholds change; closed cases retain their saved evaluation,
 - returns the new policy and the change record (`recomputedCases`).
 
-`GET /api/risk-policy` and `GET /api/risk-policy/history` require a known demo identity. No deploy
+`GET /api/risk-policy` and `GET /api/risk-policy/history` require a valid access token. No deploy
 or code change is needed to change the rules. Explanation reads use saved evidence and the
 thresholds captured during evaluation, never today's clock or a newer policy.
 

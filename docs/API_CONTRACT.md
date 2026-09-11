@@ -4,7 +4,7 @@ Backend: Express + better-sqlite3, TypeScript. Base URL `http://localhost:4000`.
 All responses JSON. Errors: `{ "error": { "code": string, "message": string, "details"?: unknown } }` with 400/401/403/404/409/500. Responses use `Cache-Control: no-store`.
 
 ## Authentication and identity
-Every `/api` request except `GET /api/health` requires `Authorization: Bearer <token>`.
+Every API data/action request except `GET /api/health` requires `Authorization: Bearer <token>`.
 CORS `OPTIONS` preflight returns protocol headers only; the subsequent data/action request still requires authentication.
 An administrator provisions a per-user, 43-character base64url credential through the local CLI
 documented in the root README. Only its SHA-256 hash is stored; it expires after eight hours and

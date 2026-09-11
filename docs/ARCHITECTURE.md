@@ -15,7 +15,7 @@ flowchart LR
 
 Example: `POST /api/cases/:id/actions`
 
-1. `http/app.ts` authenticates the bearer credential against its stored hash, expiry and revocation state, then resolves the current analyst. Missing/invalid credentials return `401`; an optional mismatched `x-analyst-id` returns `403`. The body is parsed with `actionBodySchema` (zod).
+1. `http/app.ts` authenticates the bearer credential against its stored hash and expiry, then resolves the current analyst. Revocation removes the hash. Missing/invalid credentials return `401`; an optional mismatched `x-analyst-id` returns `403`. The body is parsed with `actionBodySchema` (zod).
 2. `services/caseService.applyCaseAction(db, caseId, actor, action, note)` opens an immediate transaction, reloads the actor's stored identity and role, and reads the current policy.
 3. Inside it, `domain/transitions.validateAction` combines legal transitions, role/risk permissions and policy note requirements — no I/O.
 4. `repo/cases.updateCaseStatus`, then `domain/audit.computeEventHash` over the previous event's hash, then `repo/audit.insertAuditEvent`.
