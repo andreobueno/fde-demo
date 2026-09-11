@@ -152,7 +152,7 @@ beforeEach(() => {
       actor.id, actor.name, actor.role,
     );
   }
-  app = createApp(db);
+  app = createApp(db, { trustAnalystHeader: true });
   nextCase = 0;
 });
 

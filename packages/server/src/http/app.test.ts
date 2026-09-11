@@ -59,7 +59,7 @@ beforeEach(() => {
   addCase('c-1', { status: 'pending', riskLevel: 'high', riskScore: 70, fullName: 'Alice High', email: 'alice@x.com', reference: 'KYC-0001' });
   addCase('c-2', { status: 'in_review', riskLevel: 'medium', riskScore: 40, fullName: 'Bob Mid', email: 'bob@x.com', reference: 'KYC-0002' });
   addCase('c-3', { status: 'approved', riskLevel: 'low', riskScore: 5, fullName: 'Cara Low', email: 'cara@y.com', reference: 'KYC-0003' });
-  app = createApp(db);
+  app = createApp(db, { trustAnalystHeader: true });
 });
 
 afterEach(() => {
