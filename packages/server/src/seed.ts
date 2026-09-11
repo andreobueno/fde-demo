@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { openDb } from './db.js';
 import { schemaSql } from './schema.js';
-import { migrateRefundAudit } from './migrations.js';
+import { migrateRefundAudit, migrateRefundPendingTotal } from './migrations.js';
 import { seedRefunds } from './seedRefunds.js';
 import { insertAuditEvent } from './repo/audit.js';
 import { computeRisk } from './domain/risk.js';
@@ -104,6 +104,7 @@ function resetSchema() {
   db.exec(schemaSql());
   db.exec('PRAGMA foreign_keys = ON;');
   migrateRefundAudit(db);
+  migrateRefundPendingTotal(db);
 }
 
 const insertAnalyst = db.prepare('INSERT INTO analysts (id, name, role) VALUES (?, ?, ?)');
