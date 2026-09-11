@@ -206,6 +206,7 @@ html.js .no-js-only {
 
 input[type='search'],
 input[type='text'],
+input[type='password'],
 select,
 textarea {
   font: inherit;
