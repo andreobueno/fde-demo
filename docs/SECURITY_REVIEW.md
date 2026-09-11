@@ -38,6 +38,7 @@ direct administrative database access; there are no public provisioning endpoint
 
 All API routes except health validate bearer credentials. A bare `x-analyst-id` cannot
 authenticate, and a supplied ID that differs from the authenticated actor is rejected with `403`.
+CORS preflight returns headers only without credentials, allowing browsers to make authenticated requests.
 Missing, malformed, unknown, expired or revoked tokens receive a generic `401`. Directory access
 also requires authentication; directory entries cannot grant a caller access to those identities.
 Current roles are loaded from SQLite, so a role change takes effect without reissuing a token.

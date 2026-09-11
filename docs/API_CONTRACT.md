@@ -5,6 +5,7 @@ All responses JSON. Errors: `{ "error": { "code": string, "message": string, "de
 
 ## Authentication and identity
 Every `/api` request except `GET /api/health` requires `Authorization: Bearer <token>`.
+CORS `OPTIONS` preflight returns protocol headers only; the subsequent data/action request still requires authentication.
 An administrator provisions a per-user, 43-character base64url credential through the local CLI
 documented in the root README. Only its SHA-256 hash is stored; it expires after eight hours and
 can be revoked. No default credential is seeded.

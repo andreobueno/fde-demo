@@ -184,12 +184,27 @@ describe('bearer authentication at the API boundary', () => {
   it('protects unknown paths and methods, and authenticates before parsing request bodies', async () => {
     await request(app).get('/api/unknown').expect(401);
     await request(app).head('/api/cases').expect(401);
-    await request(app).options('/api/cases').set('Origin', 'http://localhost:5173')
-      .set('Access-Control-Request-Method', 'POST').expect(401);
     const response = await request(app).put('/api/policy').set('Content-Type', 'application/json')
       .send('{invalid JSON').expect(401);
     expect(response.body).toEqual(unauthorized);
     await request(app).get('/api/health').set('Authorization', 'Bearer invalid').expect(200);
+  });
+
+  it('allows header-only CORS preflight while still authenticating the actual request', async () => {
+    const before = records();
+    const origin = 'http://localhost:5173';
+    const preflight = await request(app).options('/api/policy').set('Origin', origin)
+      .set('Access-Control-Request-Method', 'PUT')
+      .set('Access-Control-Request-Headers', 'authorization,content-type').expect(204);
+    expect(preflight.headers['access-control-allow-origin']).toBe(origin);
+    expect(preflight.headers['access-control-allow-headers']).toContain('authorization');
+    expect(preflight.text).toBe('');
+    await request(app).put('/api/policy').set('Origin', origin)
+      .send({ version: 1, requireApprovalNote: false, reason: REFUND_NOTE }).expect(401);
+    expect(records()).toEqual(before);
+    const deniedOrigin = await request(app).options('/api/policy').set('Origin', 'https://untrusted.example')
+      .set('Access-Control-Request-Method', 'PUT').expect(204);
+    expect(deniedOrigin.headers['access-control-allow-origin']).toBeUndefined();
   });
 
   it('does not enable header impersonation from the former demo environment opt-in', async () => {

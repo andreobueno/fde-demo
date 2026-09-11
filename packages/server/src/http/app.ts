@@ -66,7 +66,6 @@ export function createApp(db: Db): Express {
   app.use(securityHeaders);
   app.use(cors({
     origin: /^https?:\/\/localhost(:\d+)?$|^https?:\/\/127\.0\.0\.1(:\d+)?$/,
-    preflightContinue: true,
   }));
 
   const resolveAnalyst = (req: Request, _res: Response, next: NextFunction) => {
