@@ -15,6 +15,11 @@
     "build:web-c": "npm run build -w packages/web-c",
     "lint:web-c": "npm run lint -w packages/web-c",
     "typecheck:web-c": "npm run typecheck -w packages/web-c",
-    "test:web-c": "npm run test -w packages/web-c"
+    "test:web-c": "npm run test -w packages/web-c",
+    "dev:web-a": "npm run dev -w packages/web-a",
+    "build:web-a": "npm run build -w packages/web-a",
+    "lint:web-a": "npm run lint -w packages/web-a",
+    "typecheck:web-a": "npm run typecheck -w packages/web-a",
+    "test:web-a": "npm run test -w packages/web-a"
   }
 }
