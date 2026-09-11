@@ -12,13 +12,14 @@ const ACTORS = {
 type Role = keyof typeof ACTORS;
 const ROLES: Role[] = ['analyst', 'senior_analyst', 'compliance_manager'];
 const READ_REVIEW_PERMISSIONS = [
-  'cases:read', 'audit:read', 'cases:review', 'cases:escalate', 'policy:read',
+  'cases:read', 'audit:read', 'cases:review', 'cases:escalate', 'policy:read', 'refunds:read',
 ];
 const EXPECTED_PERMISSIONS: Record<Role, string[]> = {
   analyst: READ_REVIEW_PERMISSIONS,
-  senior_analyst: [...READ_REVIEW_PERMISSIONS, 'cases:decide_low_medium'],
+  senior_analyst: [...READ_REVIEW_PERMISSIONS, 'cases:decide_low_medium', 'refunds:decide_low_medium'],
   compliance_manager: [
     ...READ_REVIEW_PERMISSIONS, 'cases:decide_low_medium', 'cases:decide_high', 'policy:manage',
+    'refunds:decide_low_medium', 'refunds:decide_high',
   ],
 };
 const RISKS: RiskLevel[] = ['low', 'medium', 'high'];

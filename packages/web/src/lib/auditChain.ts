@@ -1,4 +1,4 @@
-import type { AuditEvent, CaseStatus } from '../api/types';
+import type { AuditEvent, CaseStatus, RefundAuditEvent } from '../api/types';
 
 export const GENESIS_HASH = '0'.repeat(64);
 
@@ -13,11 +13,15 @@ export interface EventFields {
   createdAt: string;
 }
 
-export function canonicalJson(fields: EventFields): string {
+export interface RefundEventFields extends Omit<EventFields, 'caseId'> {
+  refundId: string;
+}
+
+export function canonicalJson(fields: EventFields | RefundEventFields): string {
   return JSON.stringify({
     action: fields.action,
     actorId: fields.actorId,
-    caseId: fields.caseId,
+    ...('refundId' in fields ? { refundId: fields.refundId } : { caseId: fields.caseId }),
     createdAt: fields.createdAt,
     fromStatus: fields.fromStatus,
     note: fields.note,
@@ -35,7 +39,7 @@ function toHex(buffer: ArrayBuffer): string {
   return hex;
 }
 
-export async function computeEventHash(prevHash: string, fields: EventFields): Promise<string> {
+export async function computeEventHash(prevHash: string, fields: EventFields | RefundEventFields): Promise<string> {
   const digest = await crypto.subtle.digest(
     'SHA-256',
     new TextEncoder().encode(prevHash + canonicalJson(fields)),
@@ -48,7 +52,7 @@ export interface ChainVerification {
   brokenAtSequence: number | null;
 }
 
-export async function verifyChain(events: AuditEvent[]): Promise<ChainVerification> {
+export async function verifyChain(events: (AuditEvent | RefundAuditEvent)[]): Promise<ChainVerification> {
   const sorted = [...events].sort((a, b) => a.sequence - b.sequence);
   let prevHash = GENESIS_HASH;
   for (const event of sorted) {
@@ -56,7 +60,7 @@ export async function verifyChain(events: AuditEvent[]): Promise<ChainVerificati
       return { ok: false, brokenAtSequence: event.sequence };
     }
     const expected = await computeEventHash(prevHash, {
-      caseId: event.caseId,
+      ...('refundId' in event ? { refundId: event.refundId } : { caseId: event.caseId }),
       sequence: event.sequence,
       actorId: event.actorId,
       action: event.action,

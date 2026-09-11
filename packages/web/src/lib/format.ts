@@ -36,6 +36,15 @@ export function formatUsd(n: number): string {
   }).format(n);
 }
 
+export function formatUsdCents(cents: number): string {
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(cents / 100);
+}
+
 export function humanize(s: string): string {
   return s
     .split('_')

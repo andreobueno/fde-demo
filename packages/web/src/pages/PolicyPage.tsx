@@ -9,7 +9,7 @@ import { Loading } from '../components/Loading';
 import { Toast } from '../components/Toast';
 import { validateNote } from '../lib/actionRules';
 import { formatDateTime, humanize } from '../lib/format';
-import styles from './CasePage.module.css';
+import styles from '../components/Detail.module.css';
 
 export function PolicyPage() {
   const { analystId } = useAnalyst();

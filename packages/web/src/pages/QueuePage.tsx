@@ -1,10 +1,14 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { getCaseStats, listCases } from '../api/client';
 import { useApi } from '../api/useApi';
 import { useAnalyst } from '../analyst/AnalystContext';
 import type { CaseSort, CaseStats, CaseStatus, KycCase, RiskLevel } from '../api/types';
 import { Badge } from '../components/Badge';
+import { DataTable, type TableColumn } from '../components/DataTable';
+import { FilterChips } from '../components/FilterChips';
+import { Pagination } from '../components/Pagination';
+import { SearchInput } from '../components/SearchInput';
 import { ErrorState } from '../components/ErrorState';
 import { Loading } from '../components/Loading';
 import { formatDateTime } from '../lib/format';
@@ -14,7 +18,7 @@ import {
   serializeQueueFilters,
   type QueueFilters,
 } from '../lib/queueFilters';
-import styles from './QueuePage.module.css';
+import styles from '../components/Queue.module.css';
 
 const ALL_STATUSES: CaseStatus[] = ['pending', 'in_review', 'approved', 'rejected', 'escalated'];
 const ALL_RISK_LEVELS: RiskLevel[] = ['low', 'medium', 'high'];
@@ -51,6 +55,16 @@ export function QueuePage() {
     }
     return analysts.find((a) => a.id === id)?.name ?? id;
   };
+  const columns: TableColumn<KycCase, CaseSort>[] = [
+    { key: 'reference', label: 'Reference', render: (c) => <span className="mono">{c.reference}</span> },
+    { key: 'customer', label: 'Customer', render: (c) => c.customer.fullName },
+    { key: 'country', label: 'Country', className: styles.colCountry, render: (c) => c.customer.countryOfResidence },
+    { key: 'riskScore', label: 'Risk', render: (c) => <><Badge kind="risk" value={c.riskLevel} /> {c.riskScore}</> },
+    { key: 'status', label: 'Status', render: (c) => <Badge kind="status" value={c.status} /> },
+    { key: 'assignedTo', label: 'Assigned to', className: styles.colAssigned, render: (c) => analystName(c.assignedTo) },
+    { key: 'createdAt', label: 'Created', render: (c) => formatDateTime(c.createdAt) },
+    { key: 'updatedAt', label: 'Updated', render: (c) => formatDateTime(c.updatedAt) },
+  ];
 
   const toggleStatus = (status: CaseStatus) => {
     const next = filters.status.includes(status)
@@ -88,12 +102,15 @@ export function QueuePage() {
         <Loading />
       ) : listResult.data ? (
         <>
-          <CaseTable
+          <DataTable
             items={listResult.data.items}
-            filters={filters}
+            columns={columns}
+            sort={filters.sort}
+            order={filters.order}
             onSort={setSort}
             onOpen={(id) => navigate(`/cases/${id}`)}
-            analystName={analystName}
+            label="KYC cases"
+            emptyMessage="No cases match these filters."
           />
           <Pagination
             total={listResult.data.total}
@@ -146,23 +163,6 @@ interface FilterBarProps {
 }
 
 function FilterBar({ filters, onChange, onToggleStatus, onToggleRisk }: FilterBarProps) {
-  const [searchInput, setSearchInput] = useState(filters.q);
-  const debounceRef = useRef<number | undefined>(undefined);
-
-  useEffect(() => {
-    setSearchInput(filters.q);
-  }, [filters.q]);
-
-  useEffect(() => () => window.clearTimeout(debounceRef.current), []);
-
-  const handleSearchChange = (value: string) => {
-    setSearchInput(value);
-    window.clearTimeout(debounceRef.current);
-    debounceRef.current = window.setTimeout(() => {
-      onChange({ ...filters, q: value, page: 1 });
-    }, 300);
-  };
-
   const hasFilters =
     filters.status.length > 0 ||
     filters.riskLevel.length > 0 ||
@@ -172,37 +172,12 @@ function FilterBar({ filters, onChange, onToggleStatus, onToggleRisk }: FilterBa
 
   return (
     <div className={styles.filterBar}>
-      <div className={styles.chipGroup}>
-        <span className={styles.chipGroupLabel}>Status</span>
-        {ALL_STATUSES.map((status) => (
-          <button
-            key={status}
-            type="button"
-            className={`${styles.chip} ${filters.status.includes(status) ? styles.active : ''}`}
-            onClick={() => onToggleStatus(status)}
-          >
-            {status.replace('_', ' ')}
-          </button>
-        ))}
-      </div>
-      <div className={styles.chipGroup}>
-        <span className={styles.chipGroupLabel}>Risk</span>
-        {ALL_RISK_LEVELS.map((level) => (
-          <button
-            key={level}
-            type="button"
-            className={`${styles.chip} ${filters.riskLevel.includes(level) ? styles.active : ''}`}
-            onClick={() => onToggleRisk(level)}
-          >
-            {level}
-          </button>
-        ))}
-      </div>
-      <input
-        type="search"
+      <FilterChips label="Status" options={ALL_STATUSES} selected={filters.status} onToggle={onToggleStatus} />
+      <FilterChips label="Risk" options={ALL_RISK_LEVELS} selected={filters.riskLevel} onToggle={onToggleRisk} />
+      <SearchInput
         placeholder="Search reference, name, email…"
-        value={searchInput}
-        onChange={(e) => handleSearchChange(e.target.value)}
+        value={filters.q}
+        onChange={(q) => onChange({ ...filters, q, page: 1 })}
       />
       <select
         value={filters.sort}
@@ -234,117 +209,6 @@ function FilterBar({ filters, onChange, onToggleStatus, onToggleRisk }: FilterBa
           Clear filters
         </button>
       ) : null}
-    </div>
-  );
-}
-
-interface CaseTableProps {
-  items: KycCase[];
-  filters: QueueFilters;
-  onSort: (sort: CaseSort) => void;
-  onOpen: (id: string) => void;
-  analystName: (id: string | null) => string;
-}
-
-function CaseTable({ items, filters, onSort, onOpen, analystName }: CaseTableProps) {
-  if (items.length === 0) {
-    return <div className={styles.empty}>No cases match these filters.</div>;
-  }
-  const header = (col: CaseSort, extraClass?: string) => {
-    const active = filters.sort === col;
-    const className = extraClass ? `${styles.sortable} ${extraClass}` : styles.sortable;
-    return (
-      <th
-        className={className}
-        aria-sort={active ? (filters.order === 'asc' ? 'ascending' : 'descending') : 'none'}
-      >
-        <button type="button" className={styles.sortButton} onClick={() => onSort(col)}>
-          {SORT_LABELS[col]}
-          {active ? (
-            <span className={styles.sortArrow} aria-hidden="true">
-              {filters.order === 'asc' ? '▲' : '▼'}
-            </span>
-          ) : (
-            <span className={styles.sortArrowInactive} aria-hidden="true">
-              ↕
-            </span>
-          )}
-        </button>
-      </th>
-    );
-  };
-  return (
-    <div className={styles.tableWrap}>
-      <table>
-        <thead>
-          <tr>
-            {header('reference')}
-            {header('customer')}
-            {header('country', styles.colCountry)}
-            {header('riskScore')}
-            {header('status')}
-            {header('assignedTo', styles.colAssigned)}
-            {header('createdAt')}
-            {header('updatedAt')}
-          </tr>
-        </thead>
-        <tbody>
-          {items.map((c) => (
-            <tr
-              key={c.id}
-              tabIndex={0}
-              onClick={() => onOpen(c.id)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  onOpen(c.id);
-                }
-              }}
-            >
-              <td className="mono">{c.reference}</td>
-              <td>{c.customer.fullName}</td>
-              <td className={styles.colCountry}>{c.customer.countryOfResidence}</td>
-              <td>
-                <Badge kind="risk" value={c.riskLevel} /> {c.riskScore}
-              </td>
-              <td>
-                <Badge kind="status" value={c.status} />
-              </td>
-              <td className={styles.colAssigned}>{analystName(c.assignedTo)}</td>
-              <td>{formatDateTime(c.createdAt)}</td>
-              <td>{formatDateTime(c.updatedAt)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-interface PaginationProps {
-  total: number;
-  page: number;
-  pageSize: number;
-  onPage: (page: number) => void;
-}
-
-function Pagination({ total, page, pageSize, onPage }: PaginationProps) {
-  const pageCount = Math.max(1, Math.ceil(total / pageSize));
-  const from = total === 0 ? 0 : (page - 1) * pageSize + 1;
-  const to = Math.min(total, page * pageSize);
-  return (
-    <div className={styles.pagination}>
-      <span>
-        Showing {from}–{to} of {total}
-      </span>
-      <button type="button" disabled={page <= 1} onClick={() => onPage(page - 1)}>
-        Prev
-      </button>
-      <button type="button" disabled={page >= pageCount} onClick={() => onPage(page + 1)}>
-        Next
-      </button>
-      <span>
-        Page {page} of {pageCount}
-      </span>
     </div>
   );
 }

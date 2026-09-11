@@ -1,6 +1,11 @@
-# KYC Review Console
+# Internal Operations: KYC and Refunds
 
 Prototype internal tool for compliance analysts at a fictional Series C fintech. Analysts work a queue of KYC cases, inspect the customer profile and the risk signals that drove the score, and approve, reject or escalate each case; every decision is written to a tamper-evident audit trail. The project exists to evaluate whether Devin-built, version-controlled software can replace the company's Microsoft Power Apps internal tools. It is a prototype: see [`docs/ASSUMPTIONS.md`](docs/ASSUMPTIONS.md) for every shortcut taken and what production would require instead.
+
+The second tool, **Refund Operations**, shares the same application shell, identity, API server,
+SQLite database and audit system. It adds refund search, filters, dashboard totals, transaction
+details and authorized approval/rejection. See the [portfolio implementation report](docs/REFUNDS_PORTFOLIO.md)
+for reuse, new work, test coverage and the limitations exposed by adding a second application.
 
 ## Architecture
 
@@ -14,7 +19,7 @@ npm workspaces monorepo:
 
 ### UI (`packages/web`)
 
-Minimal SPA: a case queue at `/` and a case detail at `/cases/:id`, plain CSS, no UI kit or data-fetching library. The dev server runs on `http://localhost:5173` and proxies `/api/*` to the API on port 4000. The analyst identity is chosen from a header dropdown (persisted in localStorage) and sent as the `x-analyst-id` header. Production build emits `packages/web/dist/`.
+Minimal SPA: a case queue at `/`, case detail at `/cases/:id`, refund queue at `/refunds`, refund detail at `/refunds/:id`, and KYC policy at `/policy`. Both queues use the same table, filter chips, debounced search and pagination components; both detail pages use the same decision dialog and audit timeline. Plain CSS, no UI kit or data-fetching library. The dev server runs on `http://localhost:5173` and proxies `/api/*` to the API on port 4000. The analyst identity is chosen from a header dropdown (persisted in localStorage) and sent as the `x-analyst-id` header. Production build emits `packages/web/dist/`.
 
 Two alternative UIs were built and evaluated; they are kept as reference implementations under `variants/`:
 
@@ -32,10 +37,15 @@ web-a was selected as the default: same features, simplest stack, fewest depende
 
 ```bash
 npm install          # installs all workspaces
-npm run seed         # drop + recreate + populate packages/server/data/kyc.db (deterministic, idempotent)
+npm run seed         # DESTRUCTIVE: reset fictional KYC, refunds and audit data
 npm run dev:server   # API on http://localhost:4000 (override with PORT)
 npm run dev:web      # UI dev server on http://localhost:5173 (see UI section above)
 ```
+
+For an existing fictional demo database, run `npm run seed:refunds` to add refund fixtures
+without resetting KYC, existing refund decisions or audit history. Startup applies the schema
+migration; it does not populate new refund records automatically. Do not run demo seeds against
+real customer databases.
 
 Checks:
 
@@ -91,9 +101,34 @@ Rules enforced by the domain layer (`packages/server/src/domain/transitions.ts`)
 
 - `reject` and `escalate` require a trimmed note of 10–1000 characters.
 - Every high-risk approval requires a 10–1000 character note, including escalated cases.
-- Low/medium approvals require the same note by default; a compliance manager can change this through the Policy page. Optional notes remain capped at 1000 characters.
+- Low/medium approvals require the same note by default; a compliance manager can change this through the KYC policy page. Optional notes remain capped at 1000 characters.
 - Decisions from `pending`, `in_review`, and `escalated` use the role/risk matrix below. Terminal cases cannot be changed.
 - Errors: `409 INVALID_TRANSITION`, `400 VALIDATION_ERROR`, `403 FORBIDDEN`, `401 UNAUTHORIZED`, `404 NOT_FOUND`.
+
+## Refund workflow
+
+Open **Refunds** in the same header. The queue shows pending count/amount and decisions made today
+(UTC), independently of the current filters. Search covers refund reference, customer name/email
+and original transaction reference. Combine status and risk chips with amount bands: under $1,000,
+$1,000–$5,000 inclusive, or over $5,000. Every displayed table column is sortable; filters and page
+are stored in the URL.
+
+Open a refund to review its customer, original transaction, exact amount, request reason and
+recorded risk indicators. All money is stored in integer cents and this prototype supports USD
+only. Decisions follow `pending → approved | rejected`; approved/rejected refunds are terminal.
+
+| Refund permission | Analyst | Senior analyst | Compliance manager |
+| --- | --- | --- | --- |
+| Read refunds and their audits | Yes | Yes | Yes |
+| Approve/reject low or medium risk, amount ≤ $5,000 | No | Yes | Yes |
+| Approve/reject high risk or amount > $5,000 | No | No | Yes |
+
+Both decisions require a trimmed 10–1000 character reason. These are prototype rules, enforced
+from the stored role, risk and amount inside the server transaction. KYC policy settings do not
+relax refund requirements. **Approval records an operational decision; it does not move money.**
+There is no refund-creation, payment-provider, reversal or settlement workflow.
+
+Refund endpoints are under `/api/refunds`; see [the API contract](docs/REFUNDS_API.md).
 
 ## Risk scoring model
 
@@ -122,13 +157,19 @@ The explanation endpoint ranks the recorded case signals, identifies the primary
 
 ## Audit hash chain
 
-Every state change appends one `audit_events` row per case with a monotonically increasing `sequence`. Each event stores `prevHash` (the previous event's `hash`, or 64 zeros for the first event) and
+Every case or refund state change appends one row to the shared `audit_events` table, with a
+monotonically increasing `sequence` per subject. An event references exactly one case or refund.
+Each event stores `prevHash` (the previous event's `hash`, or 64 zeros for the first event) and
 
 ```
 hash = sha256(prevHash + canonicalJson({ action, actorId, caseId, createdAt, fromStatus, note, sequence, toStatus }))
 ```
 
 with keys in that fixed order. Each event records server-derived actor ID/name, action, case ID, timestamp, previous/new status and the trimmed note. SQLite triggers reject `UPDATE`/`DELETE`; recursive triggers also prevent `INSERT OR REPLACE` from overwriting history. There are no application routes to insert arbitrary events, edit them, or delete them, including for managers. Case changes and audit appends commit or roll back together.
+
+Refunds use the same hash function, substituting `refundId` for `caseId` at the same position in
+canonical JSON. Existing KYC hash input and stored hashes remain unchanged. Refund changes and
+their audit appends also commit or roll back together.
 
 Hash verification detects altered hashed fields and broken links. It cannot detect deletion of the chain tail or a privileged rewrite of the whole database, and the legacy case hash does not cover actor display names. Policy changes have a separate hash chain covering actor ID/name/role, reason and complete previous/new policy snapshots. Both chains remain in the operational database; external immutable storage and chain anchoring are production requirements.
 
@@ -166,12 +207,19 @@ The API returns `allowedActions` from the same role/risk/state rules used to aut
 
 The Policy page controls whether low/medium approvals need a justification. Managers must provide a change reason and the current version; concurrent edits return `409 POLICY_CONFLICT`. Policy cannot relax high-risk role or note requirements. Every accepted policy update is audited in the same transaction.
 
-Startup upgrades the old analyst-role constraint and creates the default policy without rewriting existing identities, cases or audit rows. Back up the database before upgrades. Existing databases do not automatically gain a manager account: provision one through trusted administrative access or use a separate freshly seeded demo database. `npm run seed` remains a **destructive demo reset**, including policy history; never use it to migrate retained records.
+Startup upgrades the old analyst-role constraint, creates the default policy, and extends the
+audit table to support refund subjects while preserving existing rows and hashes. Back up the
+database before upgrades. Existing databases do not automatically gain a manager account: provision
+one through trusted administrative access or use a separate freshly seeded demo database.
+`npm run seed` remains a **destructive demo reset**, including policy and refund history; never use
+it to migrate retained records.
 
 See [authorization and audit hardening](docs/SECURITY_REVIEW.md) for the before/after assessment, test coverage and remaining production work.
 
 ## Further reading
 
+- [`docs/REFUNDS_PORTFOLIO.md`](docs/REFUNDS_PORTFOLIO.md) — marginal scope, reuse, tests and architecture findings
+- [`docs/REFUNDS_API.md`](docs/REFUNDS_API.md) — refund endpoint and audit contract
 - [`docs/API_CONTRACT.md`](docs/API_CONTRACT.md) — endpoints, types, domain rules (authoritative)
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — request flow, layering, transaction boundaries, how to build the next internal tool
 - [`docs/ASSUMPTIONS.md`](docs/ASSUMPTIONS.md) — prototype assumptions vs production requirements; the Power Apps replacement question
