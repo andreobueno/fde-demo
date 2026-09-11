@@ -4,8 +4,9 @@ Refund Operations uses the existing Express app, SQLite connection, customers, a
 permission model, service transactions and audit repository. It records review decisions only:
 there is no payment execution, payout integration, new dependency or separate service.
 
-All endpoints below require a known, database-resolved `x-analyst-id`. This is the existing
-simulated demo identity mechanism, not production authentication.
+All endpoints below require the same `Authorization: Bearer <token>` credential as KYC.
+The server resolves the current actor/role from the credential; the optional `x-analyst-id`
+only checks expected identity. See [authentication](API_CONTRACT.md#authentication-and-identity).
 
 ## Types
 

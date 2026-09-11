@@ -6,7 +6,7 @@ Scope: `packages/server`. The UI (`packages/web`) is a separate workspace that o
 
 ```mermaid
 flowchart LR
-    UI[packages/web] -->|HTTP JSON<br/>x-analyst-id| HTTP[http/app.ts<br/>routing, zod parsing,<br/>identity, error envelope]
+    UI[packages/web] -->|HTTP JSON<br/>Bearer credential| HTTP[http/app.ts<br/>routing, zod parsing,<br/>identity, error envelope]
     HTTP --> SVC[services/*<br/>use cases,<br/>transactions]
     SVC --> DOM[domain/*<br/>pure rules:<br/>transitions, risk, audit]
     SVC --> REPO[repo/*<br/>SQL, row mapping]
@@ -15,7 +15,7 @@ flowchart LR
 
 Example: `POST /api/cases/:id/actions`
 
-1. `http/app.ts` parses the body with `actionBodySchema` (zod) and resolves the analyst from `x-analyst-id` (401 if missing/unknown).
+1. `http/app.ts` authenticates the bearer credential against its stored hash, expiry and revocation state, then resolves the current analyst. Missing/invalid credentials return `401`; an optional mismatched `x-analyst-id` returns `403`. The body is parsed with `actionBodySchema` (zod).
 2. `services/caseService.applyCaseAction(db, caseId, actor, action, note)` opens an immediate transaction, reloads the actor's stored identity and role, and reads the current policy.
 3. Inside it, `domain/transitions.validateAction` combines legal transitions, role/risk permissions and policy note requirements — no I/O.
 4. `repo/cases.updateCaseStatus`, then `domain/audit.computeEventHash` over the previous event's hash, then `repo/audit.insertAuditEvent`.
@@ -86,7 +86,7 @@ All errors are `ApiError` instances converted by the final Express error handler
 | Status | Code | Source |
 | --- | --- | --- |
 | 400 | `VALIDATION_ERROR` | zod parse failure (details contains issues) or domain note rules |
-| 401 | `UNAUTHORIZED` | missing/unknown `x-analyst-id` on any sensitive API route |
+| 401 | `UNAUTHORIZED` | missing, malformed, unknown, expired or revoked bearer credential |
 | 403 | `FORBIDDEN` | role not allowed for the transition |
 | 404 | `NOT_FOUND` | unknown case or route |
 | 409 | `INVALID_TRANSITION` | action not valid from the current status |
@@ -123,7 +123,7 @@ packages/web/
 6. Implement `http/app.ts` as `createApp(db)` so tests can instantiate it with `openDb(':memory:')`. Validate every body and query string with zod at the edge.
 7. Add deterministic fictional fixtures with a non-destructive additive command. Keep full demo resets explicit and separate from startup migrations.
 8. Tests at three levels: domain (pure), service (in-memory SQLite), HTTP (supertest against `createApp`). Keep them in `*.test.ts` beside the code.
-9. Replace demo identity with validated SSO before handling sensitive data; reuse the server permission/service boundaries and error envelope. See `ASSUMPTIONS.md` and `SECURITY_REVIEW.md` for the remaining platform work.
+9. Reuse the credential authentication and server permission/service boundaries. Before handling sensitive data, add managed SSO and controlled provisioning. See `ASSUMPTIONS.md` and `SECURITY_REVIEW.md` for the remaining platform work.
 
 **Shared now:** `ApiError` + error handler, database-resolved identity, permission catalog, audit
 hashing/storage, database bootstrap, and pagination shape `{ items, total, page, pageSize }`.

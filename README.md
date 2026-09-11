@@ -19,12 +19,15 @@ npm workspaces monorepo:
 
 ### UI (`packages/web`)
 
-Minimal SPA: a case queue at `/`, case detail at `/cases/:id`, refund queue at `/refunds`, refund detail at `/refunds/:id`, and KYC policy at `/policy`. Both queues use the same table, filter chips, debounced search and pagination components; both detail pages use the same decision dialog and audit timeline. Plain CSS, no UI kit or data-fetching library. The dev server runs on `http://localhost:5173` and proxies `/api/*` to the API on port 4000. The analyst identity is chosen from a header dropdown (persisted in localStorage) and sent as the `x-analyst-id` header. Production build emits `packages/web/dist/`.
+Minimal SPA: a case queue at `/`, case detail at `/cases/:id`, refund queue at `/refunds`, refund detail at `/refunds/:id`, and KYC policy at `/policy`. Both queues use the same table, filter chips, debounced search and pagination components; both detail pages use the same decision dialog and audit timeline. Plain CSS, no UI kit or data-fetching library. The dev server runs on `http://localhost:5173` and proxies `/api/*` to the API on port 4000. Sign-in verifies an administrator-issued access token; the server determines the current identity and permissions. The token stays in memory, so refreshing the page requires signing in again. Production build emits `packages/web/dist/`.
 
 Two alternative UIs were built and evaluated; they are kept as reference implementations under `variants/`:
 
 - `variants/web-b` — component-library SPA: Tailwind CSS, shadcn-style primitives on Radix, TanStack Query + Table. Run: `npm run dev:web-b`.
 - `variants/web-c` — server-rendered: Express SSR + React 19 + htmx on port 3000. Run: `npm run dev:web-c`.
+
+The reference UIs use the same API credentials. SSR cookies require HTTPS by default; see
+[`variants/web-c/README.md`](variants/web-c/README.md) for the explicit local HTTP option.
 
 web-a was selected as the default: same features, simplest stack, fewest dependencies.
 
@@ -38,9 +41,29 @@ web-a was selected as the default: same features, simplest stack, fewest depende
 ```bash
 npm install          # installs all workspaces
 npm run seed         # DESTRUCTIVE: reset fictional KYC, refunds and audit data
+mkdir -p -m 700 .auth
+npm run auth:issue -w packages/server -- ana-003 "$PWD/.auth/analyst.token"
 npm run dev:server   # API on http://localhost:4000 (override with PORT)
 npm run dev:web      # UI dev server on http://localhost:5173 (see UI section above)
 ```
+
+Run the two dev servers in separate terminals. Open the UI and enter the token from
+`.auth/analyst.token`. Token files are private (`0600`) and `.auth/` is ignored by Git.
+The issuer refuses to overwrite a file and prints only its path and expiry. Seeded identities
+have **no default credentials**. To try elevated roles, issue another token for `ana-001`
+(senior analyst) or `ana-006` (manager) to a different output file.
+
+Tokens expire after eight hours. An administrator with database access can revoke every token
+for an identity:
+
+```bash
+npm run auth:revoke -w packages/server -- ana-003
+```
+
+The API and credential commands must use the same `KYC_DB_PATH` if overriding the default.
+Full seeding removes credentials along with the fictional database; issue new credentials after a reset.
+Signing out clears the UI session; use the revoke command to invalidate a copied token.
+Use HTTPS whenever credentials leave the local machine.
 
 For an existing fictional demo database, run `npm run seed:refunds` to add refund fixtures
 without resetting KYC, existing refund decisions or audit history. Startup applies the schema
@@ -62,10 +85,12 @@ Environment variables (server): `PORT` (default `4000`), `KYC_DB_PATH` (default 
 Quick smoke test after `npm run dev:server`:
 
 ```bash
-curl -s localhost:4000/api/health
-curl -s 'localhost:4000/api/cases?riskLevel=high&pageSize=3' -H 'x-analyst-id: ana-003'
-curl -s -X POST localhost:4000/api/cases/<id>/actions \
-  -H 'content-type: application/json' -H 'x-analyst-id: ana-003' \
+curl -s http://localhost:4000/api/health
+{ printf 'Authorization: Bearer '; cat .auth/analyst.token; } |
+  curl -s --header @- 'http://localhost:4000/api/cases?riskLevel=high&pageSize=3'
+{ printf 'Authorization: Bearer '; cat .auth/analyst.token; } |
+  curl -s --header @- -X POST 'http://localhost:4000/api/cases/<id>/actions' \
+  -H 'content-type: application/json' \
   -d '{"action":"start_review"}'
 ```
 
@@ -195,9 +220,20 @@ Hash verification detects altered hashed fields and broken links. It cannot dete
 
 ## Identity model
 
-There is no login. The **Demo identity** selector sends `x-analyst-id` on every API request. All sensitive reads and writes require a known ID (`401` for missing/unknown); only health is anonymous. The server loads roles from the database, never from request body or role headers, and re-resolves the actor within mutation transactions. New UI visitors start as `ana-003`, an analyst. Switching identity discards stale dialogs and data and aborts pending client requests; a request already committed server-side retains its original actor.
+All sensitive API reads and writes require `Authorization: Bearer <token>`; only health is anonymous.
+Credentials contain 32 random bytes encoded as base64url. SQLite stores their SHA-256 hashes,
+identity association and expiry. Revocation deletes the stored hash. Missing, invalid, expired or revoked credentials
+return `401`. The optional `x-analyst-id` is only an expected-identity guard: a mismatch returns
+`403` and never changes the authenticated actor. There is no header-only bypass.
 
-**This is enforced authorization with simulated identity, not production authentication.** Anyone able to call the API can choose a seeded manager ID. Before handling sensitive data, replace the selector/header with server-validated SSO sessions and provision roles through a controlled process.
+The server loads current roles from the database and re-resolves actors inside mutation transactions.
+Switching users requires signing out and supplying the new user's credential. Sensitive pages,
+dialogs and requests are cleared on sign-out, and late responses cannot restore a previous identity.
+A request already committed server-side retains its original actor.
+
+This closes the demo impersonation path. Production still needs SSO/OIDC, MFA, controlled identity
+and role provisioning, managed credential delivery/rotation, authentication audit events and
+deployment controls described in [`docs/SECURITY_REVIEW.md`](docs/SECURITY_REVIEW.md).
 
 Seeded identities:
 
@@ -210,7 +246,8 @@ Seeded identities:
 | `ana-005` | Ines Morales | `analyst` |
 | `ana-006` | Sofia Chen | `compliance_manager` |
 
-`GET /api/me` returns the resolved identity and permissions; `GET /api/analysts` lists demo identities.
+Authenticated `GET /api/me` returns the current identity and permissions; authenticated
+`GET /api/analysts` lists the directory. Knowing a listed ID or role grants no access.
 
 | Permission | Analyst | Senior analyst | Compliance manager |
 | --- | --- | --- | --- |

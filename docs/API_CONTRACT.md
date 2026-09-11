@@ -3,8 +3,20 @@
 Backend: Express + better-sqlite3, TypeScript. Base URL `http://localhost:4000`.
 All responses JSON. Errors: `{ "error": { "code": string, "message": string, "details"?: unknown } }` with 400/401/403/404/409/500. Responses use `Cache-Control: no-store`.
 
-## Identity (prototype assumption)
-Every `/api` request except `GET /api/health` requires `x-analyst-id: <analystId>`. Unknown/missing id → 401, with no fallback identity. The server resolves roles from stored identities and ignores role headers. This header is a demo impersonation mechanism, not authentication; production must derive identity from validated SSO/OIDC sessions.
+## Authentication and identity
+Every `/api` request except `GET /api/health` requires `Authorization: Bearer <token>`.
+An administrator provisions a per-user, 43-character base64url credential through the local CLI
+documented in the root README. Only its SHA-256 hash is stored; it expires after eight hours and
+can be revoked. No default credential is seeded.
+
+Missing, malformed, unknown, expired or revoked credentials → generic `401`, without a fallback
+identity. The server derives the actor and current role from the token's stored identity.
+`x-analyst-id` is optional and only checks expected identity: a mismatch → `403`. Supplying an ID,
+role header or request-body actor cannot authenticate or switch the caller.
+
+`GET /api/me` verifies the credential and returns the current identity and permissions. The
+authenticated analyst directory contains no credentials or hashes. Production provisioning and
+sign-in should use controlled SSO/OIDC; this prototype uses locally issued credentials.
 
 All roles read cases, audit history and policy, start review and escalate. Analysts cannot approve/reject. Seniors can approve/reject low/medium cases. Compliance managers can approve/reject any risk and change policy. The same decision rules apply to pending, in-review and escalated cases. No role may edit/delete audit history.
 
@@ -67,7 +79,7 @@ interface RiskExplanation {
   - `summary` is a deterministic template reporting the recorded score/level and primary driver. With no evidence, it reports that no signals were recorded and returns `factors: []`, `rawScore: 0`, `scoreCapped: false`, `primaryDriver: null`. It flags discrepancies between the recorded score and capped signal total, or between the recorded level and score thresholds, without inventing factors or changing stored values.
   - Requires the same known analyst identity and `cases:read` permission as before. Missing/unknown analyst ID → 401; an unknown case with an authorized identity → 404 `NOT_FOUND`.
 - `GET /api/cases/:id/audit` → `AuditEvent[]` (ascending by sequence)
-- `POST /api/cases/:id/actions` body `{ action: CaseAction; note?: string }` header `x-analyst-id` required
+- `POST /api/cases/:id/actions` body `{ action: CaseAction; note?: string }`, bearer credential required
   - strict body: unknown fields (including role, actor, risk or status) are rejected
   - transitions: `pending → in_review` (start_review); `pending|in_review → approved|rejected|escalated`; `escalated → approved|rejected`, always subject to role/risk permissions
   - `reject` and `escalate` require trimmed `note` (10..1000 chars)
