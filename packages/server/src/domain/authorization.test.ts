@@ -12,11 +12,15 @@ const PERMISSIONS: Permission[] = [
   'cases:decide_high',
   'policy:read',
   'policy:manage',
+  'refunds:read',
+  'refunds:decide_low_medium',
+  'refunds:decide_high',
 ];
 const EXPECTED: Record<AnalystRole, Permission[]> = {
-  analyst: ['cases:read', 'audit:read', 'cases:review', 'cases:escalate', 'policy:read'],
+  analyst: ['cases:read', 'audit:read', 'cases:review', 'cases:escalate', 'policy:read', 'refunds:read'],
   senior_analyst: [
     'cases:read', 'audit:read', 'cases:review', 'cases:escalate', 'cases:decide_low_medium', 'policy:read',
+    'refunds:read', 'refunds:decide_low_medium',
   ],
   compliance_manager: PERMISSIONS,
 };

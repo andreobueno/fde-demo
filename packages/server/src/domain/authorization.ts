@@ -7,6 +7,9 @@ export type Permission =
   | 'cases:escalate'
   | 'cases:decide_low_medium'
   | 'cases:decide_high'
+  | 'refunds:read'
+  | 'refunds:decide_low_medium'
+  | 'refunds:decide_high'
   | 'policy:read'
   | 'policy:manage';
 
@@ -16,6 +19,7 @@ const COMMON_PERMISSIONS: readonly Permission[] = [
   'cases:review',
   'cases:escalate',
   'policy:read',
+  'refunds:read',
 ];
 
 export function permissionsFor(role: AnalystRole): Permission[] {
@@ -23,9 +27,12 @@ export function permissionsFor(role: AnalystRole): Permission[] {
     case 'analyst':
       return [...COMMON_PERMISSIONS];
     case 'senior_analyst':
-      return [...COMMON_PERMISSIONS, 'cases:decide_low_medium'];
+      return [...COMMON_PERMISSIONS, 'cases:decide_low_medium', 'refunds:decide_low_medium'];
     case 'compliance_manager':
-      return [...COMMON_PERMISSIONS, 'cases:decide_low_medium', 'cases:decide_high', 'policy:manage'];
+      return [
+        ...COMMON_PERMISSIONS, 'cases:decide_low_medium', 'cases:decide_high', 'policy:manage',
+        'refunds:decide_low_medium', 'refunds:decide_high',
+      ];
     default:
       return [];
   }

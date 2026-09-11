@@ -45,9 +45,35 @@ CREATE TABLE IF NOT EXISTS risk_signals (
   weight INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS refunds (
+  id TEXT PRIMARY KEY,
+  reference TEXT NOT NULL UNIQUE,
+  customer_id TEXT NOT NULL REFERENCES customers(id),
+  amount_cents INTEGER NOT NULL CHECK (
+    typeof(amount_cents) = 'integer' AND amount_cents > 0 AND amount_cents <= transaction_amount_cents
+  ),
+  currency TEXT NOT NULL CHECK (currency = 'USD'),
+  status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'rejected')),
+  risk_level TEXT NOT NULL CHECK (risk_level IN ('low', 'medium', 'high')),
+  reason TEXT NOT NULL CHECK (length(trim(reason)) > 0),
+  transaction_reference TEXT NOT NULL,
+  transaction_amount_cents INTEGER NOT NULL CHECK (
+    typeof(transaction_amount_cents) = 'integer'
+    AND transaction_amount_cents > 0 AND transaction_amount_cents <= 9007199254740991
+  ),
+  transaction_occurred_at TEXT NOT NULL,
+  risk_indicators TEXT NOT NULL CHECK (json_valid(risk_indicators) AND json_type(risk_indicators) = 'array'),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS refunds_status_created_at ON refunds(status, created_at);
+CREATE INDEX IF NOT EXISTS refunds_customer_id ON refunds(customer_id);
+
 CREATE TABLE IF NOT EXISTS audit_events (
   id TEXT PRIMARY KEY,
-  case_id TEXT NOT NULL REFERENCES cases(id),
+  case_id TEXT REFERENCES cases(id),
+  refund_id TEXT REFERENCES refunds(id),
   sequence INTEGER NOT NULL,
   actor_id TEXT NOT NULL,
   actor_name TEXT NOT NULL,
@@ -58,7 +84,9 @@ CREATE TABLE IF NOT EXISTS audit_events (
   created_at TEXT NOT NULL,
   prev_hash TEXT NOT NULL,
   hash TEXT NOT NULL,
-  UNIQUE (case_id, sequence)
+  CHECK ((case_id IS NOT NULL) + (refund_id IS NOT NULL) = 1),
+  UNIQUE (case_id, sequence),
+  UNIQUE (refund_id, sequence)
 );
 
 CREATE TRIGGER IF NOT EXISTS audit_events_no_update
