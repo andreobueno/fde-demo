@@ -13,7 +13,8 @@ import { policyPatchSchema } from '../domain/riskPolicy.js';
 import { getAllowedActions, actionBodySchema } from '../domain/transitions.js';
 import { hasPermission, permissionsFor, type Permission } from '../domain/authorization.js';
 import { approvalNoteRequired, policyUpdateSchema } from '../domain/policy.js';
-import { getAnalyst, listAnalysts } from '../repo/analysts.js';
+import { listAnalysts } from '../repo/analysts.js';
+import { authenticateAccessToken } from '../repo/accessTokens.js';
 import { CASE_SORTS, caseStats, getCase, getCaseRiskThresholds, listCases } from '../repo/cases.js';
 import { getCustomer } from '../repo/customers.js';
 import { listAuditEvents } from '../repo/audit.js';
@@ -63,16 +64,19 @@ export function createApp(db: Db): Express {
   const app = express();
   app.disable('x-powered-by');
   app.use(securityHeaders);
-  app.use(cors({ origin: /^https?:\/\/localhost(:\d+)?$|^https?:\/\/127\.0\.0\.1(:\d+)?$/ }));
-  app.use(express.json({ limit: '50kb' }));
+  app.use(cors({
+    origin: /^https?:\/\/localhost(:\d+)?$|^https?:\/\/127\.0\.0\.1(:\d+)?$/,
+    preflightContinue: true,
+  }));
 
   const resolveAnalyst = (req: Request, _res: Response, next: NextFunction) => {
-    const id = req.header('x-analyst-id');
-    if (!id) {
-      return next(unauthorized('Missing x-analyst-id header.'));
+    const credential = /^Bearer ([A-Za-z0-9_-]{43})$/i.exec(req.header('authorization') ?? '');
+    const analyst = credential?.[1] ? authenticateAccessToken(db, credential[1]) : null;
+    if (!analyst) return next(unauthorized('Authentication required.'));
+    const expectedId = req.header('x-analyst-id');
+    if (expectedId !== undefined && expectedId !== analyst.id) {
+      return next(new ApiError(403, 'FORBIDDEN', 'Authenticated identity does not match the expected analyst.'));
     }
-    const analyst = getAnalyst(db, id);
-    if (!analyst) return next(unauthorized('Unknown analyst context.'));
     req.analyst = analyst;
     return next();
   };
@@ -91,6 +95,7 @@ export function createApp(db: Db): Express {
   });
 
   app.use('/api', resolveAnalyst);
+  app.use(express.json({ limit: '50kb' }));
   app.use('/api/refunds', refundRoutes(db, requirePermission));
 
   app.get('/api/me', (req, res, next) => {
