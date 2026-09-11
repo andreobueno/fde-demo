@@ -9,6 +9,7 @@ import { ErrorState } from '../components/ErrorState';
 import { Loading } from '../components/Loading';
 import { formatDateTime } from '../lib/format';
 import {
+  defaultOrderFor,
   parseQueueFilters,
   serializeQueueFilters,
   type QueueFilters,
@@ -18,9 +19,14 @@ import styles from './QueuePage.module.css';
 const ALL_STATUSES: CaseStatus[] = ['pending', 'in_review', 'approved', 'rejected', 'escalated'];
 const ALL_RISK_LEVELS: RiskLevel[] = ['low', 'medium', 'high'];
 const SORT_LABELS: Record<CaseSort, string> = {
+  reference: 'Reference',
+  customer: 'Customer',
+  country: 'Country',
+  riskScore: 'Risk',
+  status: 'Status',
+  assignedTo: 'Assigned to',
   createdAt: 'Created',
   updatedAt: 'Updated',
-  riskScore: 'Risk score',
 };
 
 export function QueuePage() {
@@ -64,7 +70,7 @@ export function QueuePage() {
     if (filters.sort === sort) {
       setFilters({ ...filters, order: filters.order === 'asc' ? 'desc' : 'asc', page: 1 });
     } else {
-      setFilters({ ...filters, sort, order: sort === 'riskScore' ? 'desc' : 'desc', page: 1 });
+      setFilters({ ...filters, sort, order: defaultOrderFor(sort), page: 1 });
     }
   };
 
@@ -242,27 +248,42 @@ function CaseTable({ items, filters, onSort, onOpen, analystName }: CaseTablePro
   if (items.length === 0) {
     return <div className={styles.empty}>No cases match these filters.</div>;
   }
-  const arrow = (col: CaseSort) =>
-    filters.sort === col ? (filters.order === 'asc' ? ' ▲' : ' ▼') : '';
+  const header = (col: CaseSort, extraClass?: string) => {
+    const active = filters.sort === col;
+    const className = extraClass ? `${styles.sortable} ${extraClass}` : styles.sortable;
+    return (
+      <th
+        className={className}
+        aria-sort={active ? (filters.order === 'asc' ? 'ascending' : 'descending') : 'none'}
+      >
+        <button type="button" className={styles.sortButton} onClick={() => onSort(col)}>
+          {SORT_LABELS[col]}
+          {active ? (
+            <span className={styles.sortArrow} aria-hidden="true">
+              {filters.order === 'asc' ? '▲' : '▼'}
+            </span>
+          ) : (
+            <span className={styles.sortArrowInactive} aria-hidden="true">
+              ↕
+            </span>
+          )}
+        </button>
+      </th>
+    );
+  };
   return (
     <div className={styles.tableWrap}>
       <table>
         <thead>
           <tr>
-            <th>Reference</th>
-            <th>Customer</th>
-            <th className={styles.colCountry}>Country</th>
-            <th className={styles.sortable} onClick={() => onSort('riskScore')}>
-              Risk{arrow('riskScore')}
-            </th>
-            <th>Status</th>
-            <th className={styles.colAssigned}>Assigned to</th>
-            <th className={styles.sortable} onClick={() => onSort('createdAt')}>
-              Created{arrow('createdAt')}
-            </th>
-            <th className={styles.sortable} onClick={() => onSort('updatedAt')}>
-              Updated{arrow('updatedAt')}
-            </th>
+            {header('reference')}
+            {header('customer')}
+            {header('country', styles.colCountry)}
+            {header('riskScore')}
+            {header('status')}
+            {header('assignedTo', styles.colAssigned)}
+            {header('createdAt')}
+            {header('updatedAt')}
           </tr>
         </thead>
         <tbody>

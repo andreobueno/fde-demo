@@ -87,6 +87,37 @@ describe('HTTP API', () => {
     expect(p1.body.items.map((i: { id: string }) => i.id)).toEqual(['c-1', 'c-2']);
   });
 
+  it('GET /api/cases sorts by reference ascending', async () => {
+    const res = await request(app).get('/api/cases?sort=reference&order=asc');
+    expect(res.status).toBe(200);
+    expect(res.body.items.map((i: { reference: string }) => i.reference)).toEqual([
+      'KYC-0001', 'KYC-0002', 'KYC-0003',
+    ]);
+  });
+
+  it('GET /api/cases sorts by customer name case-insensitively', async () => {
+    const res = await request(app).get('/api/cases?sort=customer&order=desc');
+    expect(res.status).toBe(200);
+    expect(res.body.items.map((i: { id: string }) => i.id)).toEqual(['c-3', 'c-2', 'c-1']);
+  });
+
+  it('GET /api/cases sorts by assignedTo with unassigned last', async () => {
+    db.prepare("UPDATE cases SET assigned_to = 'ana-003' WHERE id = 'c-2'").run();
+    db.prepare("UPDATE cases SET assigned_to = 'ana-001' WHERE id = 'c-3'").run();
+    const asc = await request(app).get('/api/cases?sort=assignedTo&order=asc');
+    expect(asc.status).toBe(200);
+    // Grete Lindholm < Marta Ellison, then unassigned
+    expect(asc.body.items.map((i: { id: string }) => i.id)).toEqual(['c-2', 'c-3', 'c-1']);
+    const desc = await request(app).get('/api/cases?sort=assignedTo&order=desc');
+    expect(desc.body.items.map((i: { id: string }) => i.id)).toEqual(['c-3', 'c-2', 'c-1']);
+  });
+
+  it('GET /api/cases sort=bogus → 400', async () => {
+    const res = await request(app).get('/api/cases?sort=bogus');
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('VALIDATION_ERROR');
+  });
+
   it('GET /api/cases validates bad params → 400', async () => {
     const res = await request(app).get('/api/cases?pageSize=101');
     expect(res.status).toBe(400);
