@@ -178,6 +178,8 @@ describe('applyCaseAction', () => {
     insertCase('replace', 'pending');
     const before = listAuditEvents(db, 'replace');
     expect(() => db.exec(`INSERT OR REPLACE INTO audit_events
+      (id, case_id, sequence, actor_id, actor_name, action, from_status, to_status,
+       note, created_at, prev_hash, hash)
       SELECT id, case_id, sequence, actor_id, actor_name, action, from_status, to_status,
         'forged', created_at, prev_hash, hash FROM audit_events WHERE case_id = 'replace'`))
       .toThrow(/append-only/);

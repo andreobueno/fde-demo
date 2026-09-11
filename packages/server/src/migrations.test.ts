@@ -20,7 +20,11 @@ afterEach(() => {
 function legacyDatabase(filename: string): Db {
   const legacy = new Database(filename);
   legacy.exec(schemaSql().split('CREATE TABLE IF NOT EXISTS review_policy')[0]!
-    .replace("'analyst', 'senior_analyst', 'compliance_manager'", "'analyst', 'senior_analyst'"));
+    .replace("'analyst', 'senior_analyst', 'compliance_manager'", "'analyst', 'senior_analyst'")
+    .replace('case_id TEXT REFERENCES cases(id)', 'case_id TEXT NOT NULL REFERENCES cases(id)')
+    .replace('  refund_id TEXT REFERENCES refunds(id),\n', '')
+    .replace('  CHECK ((case_id IS NOT NULL) + (refund_id IS NOT NULL) = 1),\n', '')
+    .replace('  UNIQUE (case_id, sequence),\n  UNIQUE (refund_id, sequence)', '  UNIQUE (case_id, sequence)'));
   legacy.prepare('INSERT INTO analysts VALUES (?, ?, ?)').run('senior', 'Original Name', 'senior_analyst');
   legacy.exec(`
     INSERT INTO customers VALUES (
@@ -44,7 +48,7 @@ describe('role migration', () => {
     const filename = path.join(directory, 'legacy.db');
     db = legacyDatabase(filename);
     const cases = db.prepare('SELECT * FROM cases').all();
-    const audit = db.prepare('SELECT * FROM audit_events').all();
+    const audit = db.prepare('SELECT *, NULL AS refund_id FROM audit_events').all();
     const analysts = db.prepare('SELECT * FROM analysts').all();
     db.close();
 
