@@ -1,113 +1,180 @@
 import { describe, expect, it } from 'vitest';
-import { getAllowedActions, validateAction } from './transitions.js';
-import type { AnalystRole, CaseStatus } from '../types.js';
-
-const v = (status: CaseStatus, role: AnalystRole, riskLevel: 'low' | 'medium' | 'high',
-  action: 'approve' | 'reject' | 'escalate' | 'start_review', note?: string) =>
-  validateAction({ status, role, riskLevel, action, note });
+import { actionBodySchema, getAllowedActions, validateAction } from './transitions.js';
+import type { AnalystRole, CaseAction, CaseStatus, RiskLevel } from '../types.js';
 
 const NOTE = 'This note is long enough.';
+const STATUSES: CaseStatus[] = ['pending', 'in_review', 'escalated', 'approved', 'rejected'];
+const ACTIONS: CaseAction[] = ['start_review', 'approve', 'reject', 'escalate'];
+const TARGETS: Record<CaseAction, CaseStatus> = {
+  start_review: 'in_review',
+  approve: 'approved',
+  reject: 'rejected',
+  escalate: 'escalated',
+};
+const REVIEWER_ACTIONS: Record<CaseStatus, CaseAction[]> = {
+  pending: ['start_review', 'escalate'],
+  in_review: ['escalate'],
+  escalated: [],
+  approved: [],
+  rejected: [],
+};
+const DECIDER_ACTIONS: Record<CaseStatus, CaseAction[]> = {
+  pending: ['start_review', 'approve', 'reject', 'escalate'],
+  in_review: ['approve', 'reject', 'escalate'],
+  escalated: ['approve', 'reject'],
+  approved: [],
+  rejected: [],
+};
+const POLICIES: Array<{
+  role: AnalystRole;
+  riskLevel: RiskLevel;
+  allowed: Record<CaseStatus, CaseAction[]>;
+}> = [
+  { role: 'analyst', riskLevel: 'low', allowed: REVIEWER_ACTIONS },
+  { role: 'analyst', riskLevel: 'medium', allowed: REVIEWER_ACTIONS },
+  { role: 'analyst', riskLevel: 'high', allowed: REVIEWER_ACTIONS },
+  { role: 'senior_analyst', riskLevel: 'low', allowed: DECIDER_ACTIONS },
+  { role: 'senior_analyst', riskLevel: 'medium', allowed: DECIDER_ACTIONS },
+  { role: 'senior_analyst', riskLevel: 'high', allowed: REVIEWER_ACTIONS },
+  { role: 'compliance_manager', riskLevel: 'low', allowed: DECIDER_ACTIONS },
+  { role: 'compliance_manager', riskLevel: 'medium', allowed: DECIDER_ACTIONS },
+  { role: 'compliance_manager', riskLevel: 'high', allowed: DECIDER_ACTIONS },
+];
+const NOTE_BOUNDARIES = [
+  { name: 'missing', note: undefined, length: 0 },
+  { name: 'empty', note: '', length: 0 },
+  { name: 'whitespace', note: ' \t\n ', length: 0 },
+  { name: 'one character', note: 'x', length: 1 },
+  { name: 'nine trimmed characters', note: ' \t123456789\n ', length: 9 },
+  { name: 'ten trimmed characters', note: ' \t1234567890\n ', length: 10 },
+  { name: '1000 trimmed characters', note: ` \t${'x'.repeat(1000)}\n `, length: 1000 },
+  { name: '1001 trimmed characters', note: ` ${'x'.repeat(1001)} `, length: 1001 },
+];
+const NOTE_POLICIES = [
+  { name: 'default', options: {} },
+  { name: 'enabled', options: { requireApprovalNote: true } },
+  { name: 'disabled', options: { requireApprovalNote: false } },
+];
 
-describe('getAllowedActions', () => {
-  it('pending allows all four actions', () => {
-    expect(getAllowedActions('pending', 'analyst')).toEqual([
-      'start_review', 'approve', 'reject', 'escalate',
-    ]);
-  });
-  it('in_review allows approve/reject/escalate', () => {
-    expect(getAllowedActions('in_review', 'analyst')).toEqual(['approve', 'reject', 'escalate']);
-  });
-  it('escalated allows approve/reject only for senior', () => {
-    expect(getAllowedActions('escalated', 'senior_analyst')).toEqual(['approve', 'reject']);
-    expect(getAllowedActions('escalated', 'analyst')).toEqual([]);
-  });
-  it('terminal states allow nothing', () => {
-    expect(getAllowedActions('approved', 'senior_analyst')).toEqual([]);
-    expect(getAllowedActions('rejected', 'senior_analyst')).toEqual([]);
-  });
-});
+describe.each(POLICIES)('$role / $riskLevel', ({ role, riskLevel, allowed }) => {
+  describe.each(STATUSES)('%s', (status) => {
+    it('returns precisely the permitted actions in their existing order without a note', () => {
+      expect(getAllowedActions(status, role, riskLevel)).toEqual(allowed[status]);
+    });
 
-describe('validateAction transitions', () => {
-  it('start_review only from pending', () => {
-    expect(v('pending', 'analyst', 'low', 'start_review')).toEqual({ ok: true, toStatus: 'in_review' });
-    const r = v('in_review', 'analyst', 'low', 'start_review');
-    expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error.code).toBe('INVALID_TRANSITION');
-  });
-
-  it.each(['approve', 'reject', 'escalate'] as const)(
-    '%s allowed from pending and in_review',
-    (action) => {
-      for (const status of ['pending', 'in_review'] as const) {
-        const note = action === 'approve' ? undefined : NOTE;
-        expect(v(status, 'analyst', 'low', action, note).ok).toBe(true);
+    it.each(ACTIONS)('validates %s with transition and permission precedence', (action) => {
+      const input = { status, role, riskLevel, action };
+      if (!DECIDER_ACTIONS[status].includes(action)) {
+        for (const note of [undefined, NOTE, 'x'.repeat(1001)]) {
+          expect(validateAction({ ...input, note })).toMatchObject({
+            ok: false, error: { code: 'INVALID_TRANSITION' },
+          });
+        }
+      } else if (!allowed[status].includes(action)) {
+        for (const note of [undefined, NOTE, 'x'.repeat(1001)]) {
+          expect(validateAction({ ...input, note })).toMatchObject({
+            ok: false, error: { code: 'FORBIDDEN' },
+          });
+        }
+      } else {
+        expect(validateAction({ ...input, note: NOTE })).toEqual({
+          ok: true, toStatus: TARGETS[action],
+        });
       }
-    },
-  );
+    });
 
-  it.each(['approve', 'reject', 'escalate'] as const)(
-    '%s rejected from terminal states as INVALID_TRANSITION',
-    (action) => {
-      for (const status of ['approved', 'rejected'] as const) {
-        const r = v(status, 'senior_analyst', 'low', action, NOTE);
-        expect(r.ok).toBe(false);
-        if (!r.ok) expect(r.error.code).toBe('INVALID_TRANSITION');
+    describe.each(allowed[status])('%s notes', (action) => {
+      it.each(NOTE_POLICIES)('enforces trimmed boundaries with approval notes $name', ({ options }) => {
+        const requiresNote =
+          action === 'reject' ||
+          action === 'escalate' ||
+          (action === 'approve' && (riskLevel === 'high' || options.requireApprovalNote !== false));
+        for (const { name, note, length } of NOTE_BOUNDARIES) {
+          const result = validateAction({ status, role, riskLevel, action, note, ...options });
+          if (length > 1000 || (requiresNote && length < 10)) {
+            expect(result, name).toMatchObject({
+              ok: false, error: { code: 'VALIDATION_ERROR' },
+            });
+          } else {
+            expect(result, name).toEqual({ ok: true, toStatus: TARGETS[action] });
+          }
+        }
+      });
+    });
+  });
+});
+
+describe('runtime authorization boundaries', () => {
+  it.each([
+    'unknown', '', 'manager', 'ANALYST', '__proto__', 'constructor', 'toString',
+    null, undefined, {}, ['compliance_manager'], Symbol('compliance_manager'),
+  ])('fails closed for runtime role %s', (runtimeRole) => {
+    const role = runtimeRole as AnalystRole;
+    for (const riskLevel of ['low', 'medium', 'high'] as const) {
+      for (const status of STATUSES) {
+        expect(getAllowedActions(status, role, riskLevel)).toEqual([]);
+        for (const action of ACTIONS) {
+          expect(validateAction({ status, role, riskLevel, action })).toMatchObject({
+            ok: false,
+            error: {
+              code: DECIDER_ACTIONS[status].includes(action) ? 'FORBIDDEN' : 'INVALID_TRANSITION',
+            },
+          });
+        }
       }
-    },
-  );
+    }
+  });
 
-  it('escalate from escalated is an invalid transition', () => {
-    const r = v('escalated', 'senior_analyst', 'high', 'escalate', NOTE);
-    expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error.code).toBe('INVALID_TRANSITION');
+  it('does not permit decisions without a recognized runtime risk level', () => {
+    for (const riskLevel of [undefined, 'critical', '__proto__'] as unknown as RiskLevel[]) {
+      for (const role of ['senior_analyst', 'compliance_manager'] as const) {
+        expect(getAllowedActions('pending', role, riskLevel)).toEqual(['start_review', 'escalate']);
+        for (const action of ['approve', 'reject'] as const) {
+          expect(validateAction({ status: 'pending', role, riskLevel, action, note: NOTE }))
+            .toMatchObject({ ok: false, error: { code: 'FORBIDDEN' } });
+        }
+      }
+    }
   });
 });
 
-describe('validateAction roles', () => {
-  it('analyst cannot resolve escalated case (FORBIDDEN)', () => {
-    const r = v('escalated', 'analyst', 'low', 'approve');
-    expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error.code).toBe('FORBIDDEN');
-  });
-  it('senior can resolve escalated case', () => {
-    expect(v('escalated', 'senior_analyst', 'low', 'approve').ok).toBe(true);
-    expect(v('escalated', 'senior_analyst', 'low', 'reject', NOTE).ok).toBe(true);
-  });
-});
-
-describe('validateAction notes', () => {
-  it('reject requires note 10..1000', () => {
-    const missing = v('pending', 'analyst', 'low', 'reject');
-    expect(missing.ok).toBe(false);
-    if (!missing.ok) expect(missing.error.code).toBe('VALIDATION_ERROR');
-    const short = v('pending', 'analyst', 'low', 'reject', 'too short');
-    expect(short.ok).toBe(false);
-    const long = v('pending', 'analyst', 'low', 'reject', 'x'.repeat(1001));
-    expect(long.ok).toBe(false);
-    expect(v('pending', 'analyst', 'low', 'reject', NOTE).ok).toBe(true);
+describe('actionBodySchema', () => {
+  it.each(ACTIONS)('accepts %s and normalizes surrounding note whitespace', (action) => {
+    expect(actionBodySchema.parse({ action })).toEqual({ action });
+    expect(actionBodySchema.parse({ action, note: ` \t${NOTE}\n ` })).toEqual({ action, note: NOTE });
   });
 
-  it('escalate requires note 10..1000', () => {
-    const r = v('in_review', 'analyst', 'low', 'escalate', 'short');
-    expect(r.ok).toBe(false);
-    expect(v('in_review', 'analyst', 'low', 'escalate', NOTE).ok).toBe(true);
+  it.each(NOTE_BOUNDARIES)('checks the schema maximum using $name', ({ note, length }) => {
+    expect(actionBodySchema.safeParse({ action: 'start_review', note }).success).toBe(length <= 1000);
   });
 
-  it('approve note optional but ≤1000', () => {
-    expect(v('pending', 'analyst', 'low', 'approve').ok).toBe(true);
-    expect(v('pending', 'analyst', 'low', 'approve', 'ok note here').ok).toBe(true);
-    const long = v('pending', 'analyst', 'low', 'approve', 'x'.repeat(1001));
-    expect(long.ok).toBe(false);
+  it.each([
+    ['actor', { id: 'ana-001', role: 'compliance_manager' }],
+    ['actorId', 'ana-001'],
+    ['analystId', 'ana-001'],
+    ['role', 'compliance_manager'],
+    ['status', 'approved'],
+    ['state', 'approved'],
+    ['fromStatus', 'pending'],
+    ['toStatus', 'approved'],
+    ['riskLevel', 'low'],
+    ['requireApprovalNote', false],
+    ['unknown', true],
+    ['__proto__', { role: 'compliance_manager' }],
+    ['constructor', { role: 'compliance_manager' }],
+  ])('rejects injected %s rather than silently stripping it', (key, value) => {
+    const result = actionBodySchema.safeParse({ action: 'approve', note: NOTE, [String(key)]: value });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toContainEqual(expect.objectContaining({ code: 'unrecognized_keys' }));
+    }
   });
 
-  it('approving high-risk from pending/in_review requires a note', () => {
-    const noNote = v('in_review', 'analyst', 'high', 'approve');
-    expect(noNote.ok).toBe(false);
-    if (!noNote.ok) expect(noNote.error.code).toBe('VALIDATION_ERROR');
-    expect(v('pending', 'analyst', 'high', 'approve', NOTE).ok).toBe(true);
-    // note not required when resolving an escalated high-risk case
-    expect(v('escalated', 'senior_analyst', 'high', 'approve').ok).toBe(true);
-    // medium/low do not need a note
-    expect(v('in_review', 'analyst', 'medium', 'approve').ok).toBe(true);
+  it.each([
+    null, [], 'approve', {}, { note: NOTE }, { action: 'reopen' },
+    { action: 'approve', note: 10 }, { action: 'approve', note: null },
+    { action: 'approve', note: { role: 'compliance_manager' } },
+  ])('rejects malformed body %j', (body) => {
+    expect(actionBodySchema.safeParse(body).success).toBe(false);
   });
 });
