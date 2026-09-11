@@ -1,4 +1,4 @@
-# @kyc/web-a — KYC Review Console (Approach A: Minimal SPA)
+# @kyc/web — KYC Review Console — default UI
 
 Vite + React 18 + react-router-dom v6 + CSS Modules. No UI kit, no data-fetching library.
 
@@ -10,15 +10,15 @@ From the repo root:
 npm install
 npm run seed          # idempotent; recreates the demo DB in packages/server
 npm run dev:server    # API on http://localhost:4000
-npm run dev:web-a     # this app on http://localhost:5173
+npm run dev:web     # this app on http://localhost:5173
 ```
 
 Vite proxies `/api/*` to `http://localhost:4000` (see `vite.config.ts`), so the SPA
 makes same-origin requests and no CORS setup is needed. Analyst identity is sent via
 the `x-analyst-id` header, selected in the header dropdown (persisted in localStorage).
 
-Other scripts: `npm run build:web-a`, `npm run lint:web-a`, `npm run typecheck:web-a`,
-`npm run test:web-a` (also `preview` inside this workspace).
+Other scripts: `npm run build:web`, `npm run lint:web`, `npm run typecheck:web`,
+`npm run test:web` (also `preview` inside this workspace).
 
 ## Approach
 
@@ -44,7 +44,7 @@ Dev:
 
 ## Tests
 
-`npm run test:web-a` runs vitest suites under `src/lib/` covering action-note
+`npm run test:web` runs vitest suites under `src/lib/` covering action-note
 validation, queue-filter URL parsing/serialization, and the client-side audit-chain
 verifier (checked against a real seeded fixture).
 

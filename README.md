@@ -9,13 +9,19 @@ npm workspaces monorepo:
 | Package | Role |
 | --- | --- |
 | `packages/server` | Express + better-sqlite3 API (TypeScript, ESM). Implements [`docs/API_CONTRACT.md`](docs/API_CONTRACT.md). Layered `http → services → domain (pure) → repo → SQLite`; see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). |
-| `packages/web` | Vite/React or server-rendered UI. Talks to the API over HTTP on `http://localhost:4000`. |
+| `packages/web` | Default UI: Vite + React 18 + react-router-dom SPA. Talks to the API over HTTP on `http://localhost:4000` (Vite proxies `/api/*`). |
+| `variants/web-b`, `variants/web-c` | Alternative UI implementations evaluated during selection — see [`variants/README.md`](variants/README.md). |
 
-<!-- UI-SPECIFIC: filled in after UI selection -->
 ### UI (`packages/web`)
 
-The UI stack is being selected among three candidates. This section will be completed once the choice is made (stack, dev server port, build output, how it obtains the `x-analyst-id`).
-<!-- /UI-SPECIFIC -->
+Minimal SPA: a case queue at `/` and a case detail at `/cases/:id`, plain CSS, no UI kit or data-fetching library. The dev server runs on `http://localhost:5173` and proxies `/api/*` to the API on port 4000. The analyst identity is chosen from a header dropdown (persisted in localStorage) and sent as the `x-analyst-id` header. Production build emits `packages/web/dist/`.
+
+Two alternative UIs were built and evaluated; they are kept as reference implementations under `variants/`:
+
+- `variants/web-b` — component-library SPA: Tailwind CSS, shadcn-style primitives on Radix, TanStack Query + Table. Run: `npm run dev:web-b`.
+- `variants/web-c` — server-rendered: Express SSR + React 19 + htmx on port 3000. Run: `npm run dev:web-c`.
+
+web-a was selected as the default: same features, simplest stack, fewest dependencies.
 
 ## Prerequisites
 
@@ -28,16 +34,18 @@ The UI stack is being selected among three candidates. This section will be comp
 npm install          # installs all workspaces
 npm run seed         # drop + recreate + populate packages/server/data/kyc.db (deterministic, idempotent)
 npm run dev:server   # API on http://localhost:4000 (override with PORT)
-npm run dev:web      # UI dev server — added with the UI package (see UI section above)
+npm run dev:web      # UI dev server on http://localhost:5173 (see UI section above)
 ```
 
 Checks:
 
 ```bash
-npm test             # vitest: domain, service and HTTP tests (in-memory SQLite)
-npm run lint         # eslint
-npm run typecheck    # tsc --noEmit
+npm test             # vitest: server + web suites
+npm run lint         # eslint: server + web
+npm run typecheck    # tsc --noEmit: server + web
 ```
+
+Per-variant equivalents exist for the alternative UIs (`npm run test:web-b`, `npm run typecheck:web-c`, etc.).
 
 Environment variables (server): `PORT` (default `4000`), `KYC_DB_PATH` (default `packages/server/data/kyc.db`; `:memory:` supported).
 

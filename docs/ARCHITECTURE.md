@@ -78,7 +78,7 @@ The company expects 10+ more internal apps. Copy this repository as the template
 **Workspace layout**
 
 ```
-package.json             # workspaces: packages/*, root scripts delegate with -w
+package.json             # workspaces: packages/*, variants/*; root scripts delegate with -w
 tsconfig.base.json       # shared strict TS config
 docs/API_CONTRACT.md     # write this first; it is the spec the API and UI are built from
 packages/server/src/
