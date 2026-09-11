@@ -1,6 +1,7 @@
 import { BrowserRouter, NavLink, Outlet, Route, Routes, useLocation } from 'react-router-dom';
 import { AnalystProvider, useAnalyst } from './analyst/AnalystContext';
 import { AnalystSelector } from './analyst/AnalystSelector';
+import { ManualIdentityForm } from './analyst/ManualIdentityForm';
 import { CasePage } from './pages/CasePage';
 import { NotFoundPage } from './pages/NotFoundPage';
 import { QueuePage } from './pages/QueuePage';
@@ -9,7 +10,7 @@ import { RefundQueuePage } from './pages/RefundQueuePage';
 import { RefundPage } from './pages/RefundPage';
 
 function Layout() {
-  const { analystId, setAnalystId, analysts } = useAnalyst();
+  const { analystId, setAnalystId, analysts, identitySignal } = useAnalyst();
   const { pathname } = useLocation();
   return (
     <div>
@@ -31,7 +32,10 @@ function Layout() {
           <NavLink to="/refunds">Refunds</NavLink>
           <NavLink to="/policy">KYC policy</NavLink>
         </nav>
-        <AnalystSelector analystId={analystId} analysts={analysts} onChange={setAnalystId} />
+        <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+          <AnalystSelector analystId={analystId} analysts={analysts} onChange={setAnalystId} />
+          <ManualIdentityForm key={analystId} identitySignal={identitySignal} onSelect={setAnalystId} />
+        </div>
       </header>
       <Outlet key={`${analystId}:${pathname}`} />
     </div>
