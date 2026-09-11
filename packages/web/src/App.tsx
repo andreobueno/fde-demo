@@ -1,9 +1,11 @@
-import { BrowserRouter, Link, Outlet, Route, Routes, useLocation } from 'react-router-dom';
+import { BrowserRouter, NavLink, Outlet, Route, Routes, useLocation } from 'react-router-dom';
 import { AnalystProvider, useAnalyst } from './analyst/AnalystContext';
 import { CasePage } from './pages/CasePage';
 import { NotFoundPage } from './pages/NotFoundPage';
 import { QueuePage } from './pages/QueuePage';
 import { PolicyPage } from './pages/PolicyPage';
+import { RefundQueuePage } from './pages/RefundQueuePage';
+import { RefundPage } from './pages/RefundPage';
 
 function Layout() {
   const { analystId, setAnalystId, analysts } = useAnalyst();
@@ -18,12 +20,16 @@ function Layout() {
           padding: '10px 24px',
           background: 'var(--color-surface)',
           borderBottom: '1px solid var(--color-border)',
+          flexWrap: 'wrap',
+          gap: '12px',
         }}
       >
-        <Link to="/" style={{ fontWeight: 700, color: 'var(--color-text)' }}>
-          KYC Review Console
-        </Link>
-        <Link to="/policy">Policy</Link>
+        <nav aria-label="Internal tools" style={{ display: 'flex', gap: '20px', alignItems: 'center' }}>
+          <strong>Operations</strong>
+          <NavLink to="/" end>KYC</NavLink>
+          <NavLink to="/refunds">Refunds</NavLink>
+          <NavLink to="/policy">KYC policy</NavLink>
+        </nav>
         <label style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
           Demo identity
           <select value={analystId} onChange={(e) => setAnalystId(e.target.value)}>
@@ -49,6 +55,8 @@ export function App() {
           <Route element={<Layout />}>
             <Route path="/" element={<QueuePage />} />
             <Route path="/cases/:id" element={<CasePage />} />
+            <Route path="/refunds" element={<RefundQueuePage />} />
+            <Route path="/refunds/:id" element={<RefundPage />} />
             <Route path="/policy" element={<PolicyPage />} />
             <Route path="*" element={<NotFoundPage />} />
           </Route>

@@ -164,3 +164,48 @@ export interface ApiErrorBody {
     details?: unknown;
   };
 }
+
+export type RefundStatus = 'pending' | 'approved' | 'rejected';
+export type RefundAction = 'approve' | 'reject';
+export type RefundSort = 'reference' | 'customer' | 'amountCents' | 'status' | 'riskLevel' | 'createdAt';
+export type RefundAmountBand = 'all' | 'under_1000' | '1000_to_5000' | 'over_5000';
+
+export interface RefundAuditEvent extends Omit<AuditEvent, 'caseId'> {
+  refundId: string;
+}
+
+export interface Refund {
+  id: string;
+  reference: string;
+  customerId: string;
+  customer: Pick<Customer, 'id' | 'fullName' | 'email'>;
+  amountCents: number;
+  currency: 'USD';
+  status: RefundStatus;
+  riskLevel: RiskLevel;
+  reason: string;
+  originalTransaction: { reference: string; amountCents: number; occurredAt: string };
+  riskIndicators: { code: string; title: string; description: string; severity: SignalSeverity }[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RefundDetail extends Refund {
+  allowedActions: RefundAction[];
+  approvalNoteRequired: true;
+  audit: RefundAuditEvent[];
+}
+
+export interface RefundListResponse {
+  items: Refund[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+export interface RefundStats {
+  pendingCount: number;
+  pendingAmountCents: number;
+  approvedToday: number;
+  rejectedToday: number;
+}

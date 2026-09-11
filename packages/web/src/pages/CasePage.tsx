@@ -1,23 +1,22 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { ApiError, getCase, getRiskExplanation, postCaseAction } from '../api/client';
 import { useApi } from '../api/useApi';
 import { useAnalyst } from '../analyst/AnalystContext';
 import type {
-  AuditEvent,
   CaseAction,
   Customer,
   RiskExplanation,
 } from '../api/types';
 import { ActionDialog } from '../components/ActionDialog';
+import { AuditTimeline } from '../components/AuditTimeline';
 import { Badge } from '../components/Badge';
 import { ErrorState } from '../components/ErrorState';
 import { Loading } from '../components/Loading';
 import { Toast } from '../components/Toast';
 import { ACTION_LABELS } from '../lib/actionRules';
-import { verifyChain, type ChainVerification } from '../lib/auditChain';
 import { formatDate, formatDateTime, formatUsd, humanize } from '../lib/format';
-import styles from './CasePage.module.css';
+import styles from '../components/Detail.module.css';
 
 const ACTION_BUTTON_CLASS: Record<CaseAction, string> = {
   approve: 'primary',
@@ -145,7 +144,7 @@ export function CasePage() {
           action={openAction}
           approvalNoteRequired={kase.approvalNoteRequired}
           signal={identitySignal}
-          caseReference={kase.reference}
+          subjectLabel={`case ${kase.reference}`}
           onClose={() => setOpenAction(null)}
           onSubmit={handleSubmitAction}
         />
@@ -299,56 +298,6 @@ export function RiskPanel({ explanation }: { explanation: RiskExplanation }) {
           ? ` · Raw signal total ${explanation.rawScore}, capped at 100`
           : ` · Signal total ${explanation.rawScore}`}
       </p>
-    </section>
-  );
-}
-
-function AuditTimeline({ events }: { events: AuditEvent[] }) {
-  const [verification, setVerification] = useState<ChainVerification | null>(null);
-  const sorted = useMemo(() => [...events].sort((a, b) => b.sequence - a.sequence), [events]);
-
-  useEffect(() => {
-    let cancelled = false;
-    verifyChain(events).then((result) => {
-      if (!cancelled) {
-        setVerification(result);
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [events]);
-
-  return (
-    <section className={styles.section}>
-      <h2>Audit trail</h2>
-      <div className={styles.chain}>
-        {verification === null ? (
-          <span>Verifying…</span>
-        ) : verification.ok ? (
-          <span className={styles.chainOk}>✓ Chain verified ({events.length} events)</span>
-        ) : (
-          <span className={styles.chainBad}>✗ Chain broken at #{verification.brokenAtSequence}</span>
-        )}
-      </div>
-      <div>
-        {sorted.map((e) => (
-          <div key={e.id} className={styles.event}>
-            <div className={styles.eventHead}>
-              <span className={styles.eventActor}>{e.actorName}</span>
-              <span>{humanize(e.action)}</span>
-              <Badge kind="status" value={e.fromStatus ?? '—'} />
-              <span>→</span>
-              <Badge kind="status" value={e.toStatus ?? '—'} />
-              <span className={styles.eventTime}>{formatDateTime(e.createdAt)}</span>
-            </div>
-            {e.note ? <div className={styles.eventNote}>{e.note}</div> : null}
-            <div className={styles.eventHash}>
-              hash <span className="mono" title={e.hash}>{e.hash.slice(0, 12)}…</span>
-            </div>
-          </div>
-        ))}
-      </div>
     </section>
   );
 }
