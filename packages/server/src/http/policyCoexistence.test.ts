@@ -7,6 +7,7 @@ import { addRefund, REFUND_ACTORS } from '../refundFixtures.js';
 import { insertAuditEvent } from '../repo/audit.js';
 import type { AnalystRole, AuditEvent, CaseAction, CaseStatus, RiskExplanation, RiskLevel, RiskSignal } from '../types.js';
 import { createApp } from './app.js';
+import { provisionAuthFixtures } from './authFixtures.js';
 
 const NOW = '2026-09-11T12:00:00.000Z';
 const NOTE = 'Fictional evidence reviewed for this policy change.';
@@ -51,6 +52,7 @@ interface CaseView {
 
 let db: Db;
 let app: ReturnType<typeof createApp>;
+let auth: ReturnType<typeof provisionAuthFixtures>;
 
 function addCase(id: string): void {
   db.prepare(`INSERT INTO customers (id, full_name, date_of_birth, nationality, country_of_residence,
@@ -78,17 +80,17 @@ function addCase(id: string): void {
 }
 
 async function read<T>(path: string, role: AnalystRole = 'compliance_manager'): Promise<T> {
-  const response = await request(app).get(path).set('x-analyst-id', REFUND_ACTORS[role].id).expect(200);
+  const response = await request(app).get(path).set(auth(REFUND_ACTORS[role].id)).expect(200);
   return response.body as T;
 }
 
 function put(path: string, body: object, role: AnalystRole = 'compliance_manager') {
-  return request(app).put(path).set('x-analyst-id', REFUND_ACTORS[role].id).send(body);
+  return request(app).put(path).set(auth(REFUND_ACTORS[role].id)).send(body);
 }
 
 function act(id: string, role: AnalystRole, body: object) {
   return request(app).post(`/api/cases/${id}/actions`)
-    .set('x-analyst-id', REFUND_ACTORS[role].id).send(body);
+    .set(auth(REFUND_ACTORS[role].id)).send(body);
 }
 
 async function setNotePolicy(required: boolean): Promise<ReviewPolicy> {
@@ -138,6 +140,7 @@ beforeEach(() => {
   for (const actor of Object.values(REFUND_ACTORS)) {
     db.prepare('INSERT INTO analysts (id, name, role) VALUES (?, ?, ?)').run(actor.id, actor.name, actor.role);
   }
+  auth = provisionAuthFixtures(db);
   app = createApp(db);
 });
 

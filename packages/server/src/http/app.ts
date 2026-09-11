@@ -60,22 +60,7 @@ function securityHeaders(_req: Request, res: Response, next: NextFunction): void
   next();
 }
 
-export interface AppOptions {
-  /**
-   * Trust the `x-analyst-id` request header as the caller's identity.
-   *
-   * This is demo impersonation only: any caller can select a manager ID. It is
-   * NOT authentication and must never be enabled in production. Production must
-   * derive identity from a validated SSO/OIDC session (see docs/SECURITY_REVIEW.md).
-   *
-   * Defaults to `false` (fail closed): when the header is not trusted, every
-   * sensitive route returns 401. Enable explicitly for local demos and tests.
-   */
-  trustAnalystHeader?: boolean;
-}
-
-export function createApp(db: Db, options: AppOptions = {}): Express {
-  const trustAnalystHeader = options.trustAnalystHeader ?? false;
+export function createApp(db: Db): Express {
   const app = express();
   app.disable('x-powered-by');
   app.use(securityHeaders);
@@ -85,9 +70,6 @@ export function createApp(db: Db, options: AppOptions = {}): Express {
   }));
 
   const resolveAnalyst = (req: Request, _res: Response, next: NextFunction) => {
-    if (!trustAnalystHeader) {
-      return next(unauthorized('Identity header is disabled. Configure authentication.'));
-    }
     const credential = /^Bearer ([A-Za-z0-9_-]{43})$/i.exec(req.header('authorization') ?? '');
     const analyst = credential?.[1] ? authenticateAccessToken(db, credential[1]) : null;
     if (!analyst) return next(unauthorized('Authentication required.'));
