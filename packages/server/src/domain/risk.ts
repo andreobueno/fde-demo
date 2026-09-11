@@ -1,4 +1,4 @@
-import type { Customer, RiskExplanation, RiskLevel, RiskSignal, SignalSeverity } from '../types.js';
+import type { Customer, KycCase, RiskExplanation, RiskLevel, RiskSignal, SignalSeverity } from '../types.js';
 
 export const RISK_THRESHOLDS = { medium: 30, high: 60 } as const;
 
@@ -193,30 +193,51 @@ export function computeRisk(
   return { score, level, signals };
 }
 
+function compareStrings(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
 export function explainRisk(
-  caseId: string,
-  customer: Customer,
-  now: Date,
+  kase: Pick<KycCase, 'id' | 'riskScore' | 'riskLevel'>,
+  signals: readonly RiskSignal[],
 ): RiskExplanation {
-  const { score, level, signals } = computeRisk(customer, now);
-  const factors = signals.map((s) => ({
+  const { id: caseId, riskScore, riskLevel } = kase;
+  const sortedSignals = [...signals].sort((a, b) =>
+    b.weight - a.weight || compareStrings(a.code, b.code) || compareStrings(a.id, b.id),
+  );
+  const rawScore = sortedSignals.reduce((sum, s) => sum + s.weight, 0);
+  const factors = sortedSignals.map((s) => ({
+    signalId: s.id,
     code: s.code,
     title: s.title,
     description: s.description,
     severity: s.severity,
     weight: s.weight,
-    contributionPct: score === 0 ? 0 : Math.round((s.weight / score) * 100),
+    contributionPct: rawScore === 0 ? 0 : Math.round((s.weight / rawScore) * 100),
   }));
+  const primaryDriver = factors[0] ?? null;
 
-  const summary =
-    signals.length === 0
-      ? `Case ${caseId} scored ${score} (${level} risk): no risk signals were triggered.`
-      : `Case ${caseId} scored ${score} (${level} risk) driven by ${signals.length} signal(s); top contributor: ${signals.reduce((a, b) => (b.weight > a.weight ? b : a)).title}.`;
+  let summary = `Case ${caseId} has a recorded score of ${riskScore} (${riskLevel} risk): ${
+    primaryDriver
+      ? `${factors.length} recorded signal(s) totaling ${rawScore} points; primary driver: ${primaryDriver.title}.`
+      : 'no risk signals were recorded.'
+  }`;
+  if (riskScore !== Math.min(Math.max(rawScore, 0), 100)) {
+    summary += ' The recorded score does not match the recorded weights after the 0-100 cap.';
+  }
+  const levelForScore =
+    riskScore >= RISK_THRESHOLDS.high ? 'high' : riskScore >= RISK_THRESHOLDS.medium ? 'medium' : 'low';
+  if (riskLevel !== levelForScore) {
+    summary += ' The recorded risk level does not match the score thresholds.';
+  }
 
   return {
     caseId,
-    riskScore: score,
-    riskLevel: level,
+    riskScore,
+    riskLevel,
+    rawScore,
+    scoreCapped: rawScore > 100,
+    primaryDriver,
     summary,
     thresholds: { medium: RISK_THRESHOLDS.medium, high: RISK_THRESHOLDS.high },
     factors,

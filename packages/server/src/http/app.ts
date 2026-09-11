@@ -162,7 +162,7 @@ export function createApp(db: Db): Express {
     if (!kase) return next(notFound(`Case '${caseId}' not found.`));
     const customer = getCustomer(db, kase.customerId);
     if (!customer) return next(notFound(`Customer '${kase.customerId}' not found.`));
-    res.json(explainRisk(kase.id, customer, new Date()));
+    res.json(explainRisk(kase, listSignals(db, kase.id)));
   });
 
   app.get('/api/cases/:id/audit', requirePermission('audit:read'), (req, res, next) => {

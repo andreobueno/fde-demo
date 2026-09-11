@@ -34,10 +34,15 @@ interface AuditEvent {
   fromStatus: CaseStatus | null; toStatus: CaseStatus | null; note: string | null; createdAt: string;
   prevHash: string; hash: string;   // sha256 chain: hash = sha256(prevHash + canonical(event fields))
 }
+interface RiskFactor {
+  signalId: string; code: string; title: string; description: string;
+  severity: SignalSeverity; weight: number; contributionPct: number;
+}
 interface RiskExplanation {
   caseId: string; riskScore: number; riskLevel: RiskLevel; summary: string;
+  rawScore: number; scoreCapped: boolean; primaryDriver: RiskFactor | null;
   thresholds: { medium: number; high: number };
-  factors: Array<{ code: string; title: string; description: string; severity: SignalSeverity; weight: number; contributionPct: number }>;
+  factors: RiskFactor[];
 }
 ```
 
@@ -54,6 +59,13 @@ interface RiskExplanation {
   - → `{ items: KycCase[]; total: number; page: number; pageSize: number }`
 - `GET /api/cases/:id` → `KycCase & { customer: Customer; signals: RiskSignal[]; audit: AuditEvent[]; allowedActions: CaseAction[]; approvalNoteRequired: boolean }`
 - `GET /api/cases/:id/risk-explanation` → `RiskExplanation`
+  - Uses the persisted case `riskScore`/`riskLevel` and recorded `risk_signals`, matching case details. Reads do not evaluate current customer fields, use the current clock, or mutate the case/signals.
+  - Every factor's `signalId` is the stored signal's `id`. Its code, title, description, severity and weight are returned as recorded; descriptions provide the supporting evidence. No source documents, evidence values, transaction velocity data or LLM text are generated.
+  - `factors` are sorted by weight descending, then code ascending, then signal ID ascending. String ties use deterministic, case-sensitive JavaScript string comparison (`<`/`>`), independent of locale. `primaryDriver` is the first factor in this order, or `null` when empty.
+  - `rawScore` is the sum of all recorded signal weights. `scoreCapped` is `rawScore > 100`; scores from the risk engine are capped at 100. Neither field overwrites the persisted score or level.
+  - `contributionPct = rawScore === 0 ? 0 : Math.round(weight / rawScore * 100)`. The denominator is the raw total, including when it exceeds 100, not the capped case score. Rounded percentages may not sum to exactly 100.
+  - `summary` is a deterministic template reporting the recorded score/level and primary driver. With no evidence, it reports that no signals were recorded and returns `factors: []`, `rawScore: 0`, `scoreCapped: false`, `primaryDriver: null`. It flags discrepancies between the recorded score and capped signal total, or between the recorded level and score thresholds, without inventing factors or changing stored values.
+  - Requires the same known analyst identity and `cases:read` permission as before. Missing/unknown analyst ID → 401; an unknown case with an authorized identity → 404 `NOT_FOUND`.
 - `GET /api/cases/:id/audit` → `AuditEvent[]` (ascending by sequence)
 - `POST /api/cases/:id/actions` body `{ action: CaseAction; note?: string }` header `x-analyst-id` required
   - strict body: unknown fields (including role, actor, risk or status) are rejected
@@ -95,6 +107,7 @@ interface PolicyAuditEvent {
 ## Risk engine (deterministic)
 Score = sum of signal weights, clamped 0..100. Level: `<30 low`, `30..59 medium`, `≥60 high`.
 Signal catalogue (code → weight): `SANCTIONS_HIT` 60, `PEP` 35, `HIGH_RISK_JURISDICTION` 25 (residence or nationality in list), `ADVERSE_MEDIA` 10 per hit (max 30), `ID_DOC_UNVERIFIED` 20, `ADDRESS_UNVERIFIED` 10, `HIGH_EXPECTED_VOLUME` 15 (>50k USD/month), `OPAQUE_SOURCE_OF_FUNDS` 15 (`crypto`, `cash_intensive_business`, `unknown`), `NEW_ACCOUNT` 5 (<30 days), `CASH_INTENSIVE_OCCUPATION` 10.
+These scoring rules are unchanged. The explanation endpoint describes the saved evaluation rather than running the engine again; legacy or inconsistent records retain their recorded score, level and evidence.
 
 ## Seed
 `npm run seed` (destructive, drops+recreates including policy and both audit histories). 6 identities (3 analysts, 2 seniors, 1 compliance manager), ~60 customers/cases, deterministic PRNG seed `kyc-demo-2026`, fictional names — no real PII. Mix of statuses; audit chain includes creation event `CASE_CREATED`. Seeded decisions use actors authorized for the case's risk.
