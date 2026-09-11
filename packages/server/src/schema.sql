@@ -180,3 +180,14 @@ BEFORE DELETE ON policy_audit_events
 BEGIN
   SELECT RAISE(ABORT, 'policy_audit_events is append-only');
 END;
+
+CREATE TABLE IF NOT EXISTS access_tokens (
+  token_hash TEXT PRIMARY KEY NOT NULL CHECK (
+    length(token_hash) = 64 AND token_hash NOT GLOB '*[^0-9a-f]*'
+  ),
+  analyst_id TEXT NOT NULL REFERENCES analysts(id) ON DELETE CASCADE,
+  issued_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL CHECK (expires_at > issued_at)
+);
+
+CREATE INDEX IF NOT EXISTS access_tokens_analyst_id ON access_tokens(analyst_id);

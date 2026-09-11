@@ -13,7 +13,8 @@ import { policyPatchSchema } from '../domain/riskPolicy.js';
 import { getAllowedActions, actionBodySchema } from '../domain/transitions.js';
 import { hasPermission, permissionsFor, type Permission } from '../domain/authorization.js';
 import { approvalNoteRequired, policyUpdateSchema } from '../domain/policy.js';
-import { getAnalyst, listAnalysts } from '../repo/analysts.js';
+import { listAnalysts } from '../repo/analysts.js';
+import { authenticateAccessToken } from '../repo/accessTokens.js';
 import { CASE_SORTS, caseStats, getCase, getCaseRiskThresholds, listCases } from '../repo/cases.js';
 import { getCustomer } from '../repo/customers.js';
 import { listAuditEvents } from '../repo/audit.js';
@@ -59,38 +60,23 @@ function securityHeaders(_req: Request, res: Response, next: NextFunction): void
   next();
 }
 
-export interface AppOptions {
-  /**
-   * Trust the `x-analyst-id` request header as the caller's identity.
-   *
-   * This is demo impersonation only: any caller can select a manager ID. It is
-   * NOT authentication and must never be enabled in production. Production must
-   * derive identity from a validated SSO/OIDC session (see docs/SECURITY_REVIEW.md).
-   *
-   * Defaults to `false` (fail closed): when the header is not trusted, every
-   * sensitive route returns 401. Enable explicitly for local demos and tests.
-   */
-  trustAnalystHeader?: boolean;
-}
-
-export function createApp(db: Db, options: AppOptions = {}): Express {
-  const trustAnalystHeader = options.trustAnalystHeader ?? false;
+export function createApp(db: Db): Express {
   const app = express();
   app.disable('x-powered-by');
   app.use(securityHeaders);
-  app.use(cors({ origin: /^https?:\/\/localhost(:\d+)?$|^https?:\/\/127\.0\.0\.1(:\d+)?$/ }));
-  app.use(express.json({ limit: '50kb' }));
+  app.use(cors({
+    origin: /^https?:\/\/localhost(:\d+)?$|^https?:\/\/127\.0\.0\.1(:\d+)?$/,
+    preflightContinue: true,
+  }));
 
   const resolveAnalyst = (req: Request, _res: Response, next: NextFunction) => {
-    if (!trustAnalystHeader) {
-      return next(unauthorized('Identity header is disabled. Configure authentication.'));
+    const credential = /^Bearer ([A-Za-z0-9_-]{43})$/i.exec(req.header('authorization') ?? '');
+    const analyst = credential?.[1] ? authenticateAccessToken(db, credential[1]) : null;
+    if (!analyst) return next(unauthorized('Authentication required.'));
+    const expectedId = req.header('x-analyst-id');
+    if (expectedId !== undefined && expectedId !== analyst.id) {
+      return next(new ApiError(403, 'FORBIDDEN', 'Authenticated identity does not match the expected analyst.'));
     }
-    const id = req.header('x-analyst-id');
-    if (!id) {
-      return next(unauthorized('Missing x-analyst-id header.'));
-    }
-    const analyst = getAnalyst(db, id);
-    if (!analyst) return next(unauthorized('Unknown analyst context.'));
     req.analyst = analyst;
     return next();
   };
@@ -109,6 +95,7 @@ export function createApp(db: Db, options: AppOptions = {}): Express {
   });
 
   app.use('/api', resolveAnalyst);
+  app.use(express.json({ limit: '50kb' }));
   app.use('/api/refunds', refundRoutes(db, requirePermission));
 
   app.get('/api/me', (req, res, next) => {

@@ -3,6 +3,7 @@ import request from 'supertest';
 import { openDb, type Db } from '../db.js';
 import type { Refund, RefundAuditEvent, RefundDetail } from '../types.js';
 import { createApp } from './app.js';
+import { provisionAuthFixtures } from './authFixtures.js';
 import * as authorization from '../domain/authorization.js';
 import { REFUND_SORTS } from '../domain/refunds.js';
 import { getRefund } from '../repo/refunds.js';
@@ -12,9 +13,11 @@ import { seedRefunds } from '../seedRefunds.js';
 
 let db: Db;
 let app: ReturnType<typeof createApp>;
+let auth: ReturnType<typeof provisionAuthFixtures>;
 beforeEach(() => {
   db = openDb(':memory:');
   refundFixtureContext(db);
+  auth = provisionAuthFixtures(db);
   app = createApp(db);
 });
 afterEach(() => { vi.restoreAllMocks(); db.close(); });
@@ -37,8 +40,8 @@ describe('refund identity and protected reads', () => {
   });
   it.each(roles)('allows %s to read list, stats, detail and audit', async (role) => {
     addRefund(db);
-    for (const path of paths) await request(app).get(path).set('x-analyst-id', REFUND_ACTORS[role].id).expect(200);
-    const detail = await request(app).get('/api/refunds/refund-test').set('x-analyst-id', REFUND_ACTORS[role].id);
+    for (const path of paths) await request(app).get(path).set(auth(REFUND_ACTORS[role].id)).expect(200);
+    const detail = await request(app).get('/api/refunds/refund-test').set(auth(REFUND_ACTORS[role].id));
     expect(detail.body.customer).toEqual({
       id: 'cus-001', fullName: 'Avery Fiction', email: 'avery.fiction@example-mail.com',
     });
@@ -55,16 +58,16 @@ describe('refund identity and protected reads', () => {
     );
     for (const path of paths) {
       const expected = denied === 'refunds:read' || path.includes('refund-test') ? 403 : 200;
-      await request(app).get(path).set('x-analyst-id', manager.id).expect(expected);
+      await request(app).get(path).set(auth(manager.id)).expect(expected);
     }
-    await request(app).post('/api/refunds/refund-test/actions').set('x-analyst-id', manager.id)
+    await request(app).post('/api/refunds/refund-test/actions').set(auth(manager.id))
       .send({ action: 'approve', note: REFUND_NOTE }).expect(403);
   });
   it('returns 404 on missing refund reads and decisions', async () => {
     for (const path of ['/api/refunds/missing', '/api/refunds/missing/audit']) {
-      await request(app).get(path).set('x-analyst-id', manager.id).expect(404);
+      await request(app).get(path).set(auth(manager.id)).expect(404);
     }
-    await request(app).post('/api/refunds/missing/actions').set('x-analyst-id', manager.id)
+    await request(app).post('/api/refunds/missing/actions').set(auth(manager.id))
       .send({ action: 'approve', note: REFUND_NOTE }).expect(404);
   });
 });
@@ -78,12 +81,12 @@ describe('refund HTTP decisions', () => {
   it.each(matrix)('$role $action $riskLevel $amountCents matches allowedActions', async (input) => {
     addRefund(db, { riskLevel: input.riskLevel, amountCents: input.amountCents });
     const identity = REFUND_ACTORS[input.role].id;
-    const before = await request(app).get('/api/refunds/refund-test').set('x-analyst-id', identity).expect(200);
+    const before = await request(app).get('/api/refunds/refund-test').set(auth(identity)).expect(200);
     const permitted = input.role === 'compliance_manager' ||
       (input.role === 'senior_analyst' && input.riskLevel !== 'high' && input.amountCents <= 500000);
     expect(before.body.allowedActions).toEqual(permitted ? ['approve', 'reject'] : []);
     const result = await request(app).post('/api/refunds/refund-test/actions')
-      .set('x-analyst-id', identity).set('x-role', 'compliance_manager')
+      .set(auth(identity)).set('x-role', 'compliance_manager')
       .send({ action: input.action, note: `  ${REFUND_NOTE}  ` }).expect(permitted ? 200 : 403);
     if (!permitted) {
       expect(getRefund(db, 'refund-test')?.status).toBe('pending');
@@ -95,7 +98,7 @@ describe('refund HTTP decisions', () => {
       expect(detail.audit).toHaveLength(2);
       expect(detail.audit[1]).toMatchObject({ actorId: identity, note: REFUND_NOTE, action: input.action });
       for (const action of actions) {
-        await request(app).post('/api/refunds/refund-test/actions').set('x-analyst-id', identity)
+        await request(app).post('/api/refunds/refund-test/actions').set(auth(identity))
           .send({ action, note: REFUND_NOTE }).expect(409);
       }
       expect(listRefundAuditEvents(db, 'refund-test')).toEqual(detail.audit);
@@ -112,7 +115,7 @@ describe('refund HTTP decisions', () => {
   it.each(invalid)('rejects field %s=%j without writes', async (field, value) => {
     addRefund(db);
     const history = listRefundAuditEvents(db, 'refund-test');
-    await request(app).post('/api/refunds/refund-test/actions').set('x-analyst-id', manager.id)
+    await request(app).post('/api/refunds/refund-test/actions').set(auth(manager.id))
       .send({ action: 'approve', note: REFUND_NOTE, [field]: value }).expect(400);
     expect(getRefund(db, 'refund-test')?.status).toBe('pending');
     expect(listRefundAuditEvents(db, 'refund-test')).toEqual(history);
@@ -120,7 +123,7 @@ describe('refund HTTP decisions', () => {
   it.each(actions)('%s accepts trimmed 10 and 1000 character notes', async (action) => {
     for (const length of [10, 1000]) {
       addRefund(db, { id: `refund-${length}`, reference: `RFD-${length}` });
-      const result = await request(app).post(`/api/refunds/refund-${length}/actions`).set('x-analyst-id', senior.id)
+      const result = await request(app).post(`/api/refunds/refund-${length}/actions`).set(auth(senior.id))
         .send({ action, note: `  ${'n'.repeat(length)}  ` }).expect(200);
       expect(result.body.audit[1].note).toBe('n'.repeat(length));
     }
@@ -130,7 +133,7 @@ describe('refund HTTP decisions', () => {
     const history = listRefundAuditEvents(db, 'refund-test');
     for (const path of ['/api/refunds/refund-test/audit', '/api/refunds/refund-test/audit/creation-refund-test']) {
       for (const method of ['post', 'put', 'patch', 'delete'] as const) {
-        await request(app)[method](path).set('x-analyst-id', REFUND_ACTORS[role].id).send(history[0]).expect(404);
+        await request(app)[method](path).set(auth(REFUND_ACTORS[role].id)).send(history[0]).expect(404);
       }
     }
     expect(listRefundAuditEvents(db, 'refund-test')).toEqual(history);
@@ -140,7 +143,7 @@ describe('refund HTTP decisions', () => {
 describe('refund queue HTTP contract', () => {
   beforeEach(() => { seedRefunds(db, new Date(REFUND_TIME)); });
   async function queue(query = ''): Promise<{ items: Refund[]; total: number; page: number; pageSize: number }> {
-    const res = await request(app).get(`/api/refunds${query}`).set('x-analyst-id', senior.id).expect(200);
+    const res = await request(app).get(`/api/refunds${query}`).set(auth(senior.id)).expect(200);
     return res.body as { items: Refund[]; total: number; page: number; pageSize: number };
   }
   it('returns frozen defaults and stable paging with total before pagination', async () => {
@@ -164,14 +167,14 @@ describe('refund queue HTTP contract', () => {
     expect(result.items.every((refund) => refund.amountCents >= Number(min) && refund.amountCents <= Number(max))).toBe(true);
   });
   it('combines comma filters and text search without changing dataset stats', async () => {
-    const before = await request(app).get('/api/refunds/stats').set('x-analyst-id', senior.id);
+    const before = await request(app).get('/api/refunds/stats').set(auth(senior.id));
     const result = await queue('?status=pending,approved&riskLevel=low,medium&q=Avery&amountBand=1000_to_5000');
     expect(result.total).toBeGreaterThan(0);
     expect(result.items.every((refund) =>
       ['pending', 'approved'].includes(refund.status) && ['low', 'medium'].includes(refund.riskLevel)
       && refund.customer.fullName === 'Avery Fiction' && refund.amountCents >= 100000 && refund.amountCents <= 500000,
     )).toBe(true);
-    const after = await request(app).get('/api/refunds/stats').set('x-analyst-id', senior.id);
+    const after = await request(app).get('/api/refunds/stats').set(auth(senior.id));
     expect(after.body).toEqual(before.body);
   });
   it.each([
@@ -206,11 +209,11 @@ describe('refund queue HTTP contract', () => {
     'page=0', 'page=-1', 'page=1.5', 'pageSize=0', 'pageSize=101', 'pageSize=1.5',
     'q[]=a&q[]=b', 'status[x]=pending', 'unexpected=1', 'page=9007199254740992',
   ])('rejects invalid query %s', async (query) => {
-    await request(app).get(`/api/refunds?${query}`).set('x-analyst-id', senior.id).expect(400);
+    await request(app).get(`/api/refunds?${query}`).set(auth(senior.id)).expect(400);
   });
   it('returns the same audit array through detail and the audit endpoint', async () => {
-    const detail = await request(app).get('/api/refunds/refund-013').set('x-analyst-id', manager.id);
-    const audit = await request(app).get('/api/refunds/refund-013/audit').set('x-analyst-id', manager.id);
+    const detail = await request(app).get('/api/refunds/refund-013').set(auth(manager.id));
+    const audit = await request(app).get('/api/refunds/refund-013/audit').set(auth(manager.id));
     expect(audit.body as RefundAuditEvent[]).toEqual((detail.body as RefundDetail).audit);
   });
 });
