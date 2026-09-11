@@ -37,12 +37,15 @@ export function formatUsd(n: number): string {
 }
 
 export function formatUsdCents(cents: number): string {
+  const fraction = String(Math.abs(cents % 100)).padStart(2, '0');
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
     currency: 'USD',
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
-  }).format(cents / 100);
+  }).formatToParts(Math.trunc(cents / 100))
+    .map((part) => part.type === 'fraction' ? fraction : part.value)
+    .join('');
 }
 
 export function humanize(s: string): string {

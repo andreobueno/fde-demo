@@ -130,6 +130,11 @@ There is no refund-creation, payment-provider, reversal or settlement workflow.
 
 Refund endpoints are under `/api/refunds`; see [the API contract](docs/REFUNDS_API.md).
 
+**Accepted prototype limit:** pending totals above 9,007,199,254,740,991 cents (roughly
+$90 trillion) can lose cent precision; totals beyond SQLite's integer range make the stats
+endpoint fail. This aggregate bound is not enforced. The seeded data stays well below it;
+see [aggregate-money limits](docs/REFUNDS_API.md#known-aggregate-money-limit).
+
 ## Risk scoring model
 
 Deterministic: score = sum of triggered signal weights, clamped to 0–100. Level: `< medium` low, `medium..high-1` medium, `≥ high` high. Weights and thresholds are **configuration, not code** — see [Risk policy](#risk-policy). Defaults:

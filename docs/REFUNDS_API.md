@@ -88,6 +88,23 @@ UTC calendar day, `[00:00:00.000Z, next midnight)`, based on decision audit time
 not request creation or row update dates. Approvals/rejections count distinct refund IDs
 with the corresponding action and pending-to-terminal transition.
 
+### Known aggregate-money limit
+
+`pendingAmountCents` is a JSON number populated from SQLite's integer `SUM`. Exact
+cent precision is supported only while the pending total stays within
+`Number.MAX_SAFE_INTEGER`: 9,007,199,254,740,991 cents ($90,071,992,547,409.91).
+The prototype does **not** enforce this aggregate bound; validating each refund as
+a safe integer does not ensure that their sum is safe.
+
+Above that bound, conversion to a JavaScript number can lose cents. If the sum exceeds
+SQLite's signed 64-bit integer maximum (9,223,372,036,854,775,807 cents), `SUM` raises
+an overflow error and `GET /api/refunds/stats` returns 500 `INTERNAL`.
+
+This is an accepted prototype limitation; the seeded totals stay well below it.
+The API remains numeric, with no new aggregate validation or arbitrary-precision
+accumulation. Before production, choose an exact aggregate representation or enforce
+an aggregate bound consistent with the chosen representation.
+
 ## Authorization and transitions
 
 All roles retain every KYC permission and receive `refunds:read`.

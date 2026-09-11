@@ -127,6 +127,12 @@ These are automated domain, HTTP and rendering checks; they are not a browser in
    integration, idempotency, reconciliation, cumulative refund limits against a payment, separation
    of duties and failed-payment handling. This prototype validates individual refund amounts
    against a recorded original amount, without executing or reconciling real payments.
+9. **Safe individual amounts do not guarantee safe totals.** The numeric pending-total API can
+   lose cents above 9,007,199,254,740,991 cents (roughly $90 trillion); SQLite `SUM` overflow
+   at its signed 64-bit integer limit makes the stats endpoint return 500. No aggregate bound
+   is enforced. This is an accepted prototype limitation, documented rather than expanding
+   the API or implementation scope. Production needs an exact aggregate representation or
+   an enforced aggregate bound. See [the API limit](REFUNDS_API.md#known-aggregate-money-limit).
 
 The second tool demonstrates incremental reuse of the application layer. It does not replace
 Power Apps' surrounding identity administration, connectors, governance and operational services.
