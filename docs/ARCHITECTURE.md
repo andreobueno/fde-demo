@@ -37,6 +37,19 @@ Example: `POST /api/cases/:id/actions`
 
 Dependency direction is strictly downward: `http → services → {domain, repo} → db`. Domain has no dependencies on other layers.
 
+## Recorded risk explanations
+
+The explanation endpoint uses the case's recorded score, level and risk-signal rows. It ranks those
+saved factors, identifies the primary driver and exposes each evidence-record ID. This avoids
+re-evaluating time-dependent rules when an analyst opens an older case. Contribution percentages use
+the raw signal total; if that total exceeds 100, the response also explains that the saved risk score
+was capped. New or changed scoring policy must create a new evaluation rather than silently changing
+the explanation of an existing case.
+
+Deterministic policy evaluation and recorded evidence remain authoritative. A production system may
+add an LLM-written summary, but that summary should reference this structured result and must not
+replace its score, factor weights or evidence links.
+
 ## Why business rules are pure functions
 
 `validateAction`, `getAllowedActions`, `computeRisk*` and `computeEventHash` take plain values and return plain values. Consequences:

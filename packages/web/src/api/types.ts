@@ -109,6 +109,7 @@ export interface AuditEvent {
 }
 
 export interface RiskFactor {
+  signalId: string;
   code: string;
   title: string;
   description: string;
@@ -121,9 +122,12 @@ export interface RiskExplanation {
   caseId: string;
   riskScore: number;
   riskLevel: RiskLevel;
+  rawScore: number;
+  scoreCapped: boolean;
   summary: string;
   thresholds: { medium: number; high: number };
   factors: RiskFactor[];
+  primaryDriver: RiskFactor | null;
 }
 
 export interface CaseDetail extends KycCase {

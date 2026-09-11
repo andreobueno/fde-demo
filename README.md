@@ -99,6 +99,12 @@ Rules enforced by the domain layer (`packages/server/src/domain/transitions.ts`)
 
 Deterministic: score = sum of triggered signal weights, clamped to 0–100. Level: `< 30` low, `30–59` medium, `≥ 60` high.
 
+The prototype deliberately uses deterministic explanations. A production implementation could augment this with an LLM, but the system should retain structured evidence and deterministic policy evaluation as the source of truth.
+
+This evaluation intentionally tests the AI-assisted layer over a working workflow rather than treating generated text as the workflow itself. Any future summary should point back to the recorded factors below; authorization, risk policy and case decisions remain deterministic.
+
+That follows the same architectural direction as [Microsoft 365 Copilot over Dataverse](https://learn.microsoft.com/en-us/power-apps/maker/data-platform/data-platform-data-copilot): assistance sits over governed application data and respects the underlying access model. This prototype tests that seam with a deterministic explanation first, rather than pretending AI replaces the workflow.
+
 | Code | Weight | Trigger |
 | --- | --- | --- |
 | `SANCTIONS_HIT` | 60 | Customer matches a sanctions list |
@@ -112,7 +118,7 @@ Deterministic: score = sum of triggered signal weights, clamped to 0–100. Leve
 | `CASH_INTENSIVE_OCCUPATION` | 10 | Cash-intensive occupation |
 | `NEW_ACCOUNT` | 5 | Account opened < 30 days ago |
 
-The explanation endpoint reports each factor's `contributionPct` relative to the final (clamped) score so analysts can see what drove the level.
+The explanation endpoint ranks the recorded case signals, identifies the primary driver and reports each factor's `contributionPct` relative to the raw signal total. The case page keeps descriptions and evidence-record IDs behind **View supporting evidence**. If the raw total exceeds 100, the displayed risk score remains capped at 100 while the explanation shows the uncapped total.
 
 ## Audit hash chain
 
