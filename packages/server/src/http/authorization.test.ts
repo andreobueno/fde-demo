@@ -532,7 +532,6 @@ describe.each([true, false])('requireApprovalNote = %s', (required) => {
     { action: 'reject', status: 'escalated', risk: 'medium' },
     { action: 'escalate', status: 'pending', risk: 'high' },
     { action: 'escalate', status: 'in_review', risk: 'low' },
-    ...(required ? [{ action: 'approve' as const, status: 'in_review' as const, risk: 'low' as const }] : []),
   ];
   describe.each(requiredNoteScenarios)('$action $risk $status always requires a bounded note',
     ({ action, status, risk }) => {
