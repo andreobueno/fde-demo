@@ -63,7 +63,9 @@ export function RiskPanel({ id, riskLevel }: { id: string; riskLevel: RiskLevel 
                     <Badge>{factor.severity}</Badge>
                     <span className="text-sm font-medium">{factor.title}</span>
                   </div>
-                  <span className="text-xs font-semibold text-slate-600">+{factor.weight}</span>
+                  <span className="text-xs font-semibold text-slate-600">
+                    +{factor.weight} · {factor.contributionPct}%
+                  </span>
                 </div>
                 <div className="mt-1 h-1 rounded bg-slate-100">
                   <div

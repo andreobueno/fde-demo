@@ -92,8 +92,7 @@ export function ActionDialog({
             maxLength={1000}
             placeholder="Add a note for the audit history..."
           />
-          <div className="flex justify-between text-xs text-slate-500">
-            <span>{helper}</span>
+          <div className="flex justify-end text-xs text-slate-500">
             <span>{note.length}/1000</span>
           </div>
           {(error || validation) && (

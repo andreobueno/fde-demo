@@ -1,5 +1,5 @@
 import { Link, useParams } from 'react-router-dom';
-import { useCase } from '@/api/queries';
+import { useAnalysts, useCase } from '@/api/queries';
 import { ApiRequestError } from '@/api/client';
 import { formatDate, formatDateTime, formatUsd, yesNo } from '@/lib/format';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -17,6 +17,7 @@ import {
 export function CaseDetailPage() {
   const { id = '' } = useParams();
   const query = useCase(id);
+  const { data: analysts = [] } = useAnalysts();
   if (query.isLoading) return <LoadingState />;
   if (query.isError && query.error instanceof ApiRequestError && query.error.status === 404)
     return <NotFoundContent />;
@@ -28,6 +29,7 @@ export function CaseDetailPage() {
       />
     );
   const c = query.data;
+  const assignee = analysts.find((a) => a.id === c.assignedTo)?.name ?? c.assignedTo ?? '—';
   const customerFields = [
     { label: 'Full name', value: c.customer.fullName },
     { label: 'Date of birth', value: formatDate(c.customer.dateOfBirth) },
@@ -73,7 +75,7 @@ export function CaseDetailPage() {
             <span className="text-sm text-slate-500">Score {c.riskScore}</span>
           </div>
           <p className="mt-2 text-sm text-slate-500">
-            Assigned to {c.assignedTo ?? '—'} · Created {formatDateTime(c.createdAt)} · Updated{' '}
+            Assigned to {assignee} · Created {formatDateTime(c.createdAt)} · Updated{' '}
             {formatDateTime(c.updatedAt)}
           </p>
         </div>
