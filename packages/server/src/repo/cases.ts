@@ -105,6 +105,28 @@ export function updateCaseStatus(
   );
 }
 
+export function listOpenCases(db: Db): KycCase[] {
+  return db
+    .prepare(`${CASE_SELECT} WHERE c.status IN ('pending', 'in_review', 'escalated') ORDER BY c.id`)
+    .all()
+    .map(rowToKycCase);
+}
+
+export function updateCaseRisk(
+  db: Db,
+  id: string,
+  riskScore: number,
+  riskLevel: RiskLevel,
+  updatedAt: string,
+): void {
+  db.prepare('UPDATE cases SET risk_score = ?, risk_level = ?, updated_at = ? WHERE id = ?').run(
+    riskScore,
+    riskLevel,
+    updatedAt,
+    id,
+  );
+}
+
 export function caseStats(db: Db): {
   byStatus: Record<CaseStatus, number>;
   byRiskLevel: Record<RiskLevel, number>;

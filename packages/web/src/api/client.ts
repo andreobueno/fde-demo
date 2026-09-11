@@ -8,6 +8,10 @@ import type {
   CaseListResponse,
   CaseStats,
   RiskExplanation,
+  RiskPolicy,
+  RiskPolicyChange,
+  RiskPolicyPatch,
+  RiskPolicyUpdateResponse,
 } from './types';
 import type { QueueFilters } from '../lib/queueFilters';
 import { queueFiltersToQuery } from '../lib/queueFilters';
@@ -29,7 +33,7 @@ export class ApiError extends Error {
 }
 
 interface ApiRequestOptions {
-  method?: 'GET' | 'POST';
+  method?: 'GET' | 'POST' | 'PUT';
   body?: unknown;
   analystId: string;
   signal?: AbortSignal | undefined;
@@ -117,6 +121,28 @@ export function getAudit(
   signal?: AbortSignal,
 ): Promise<AuditEvent[]> {
   return apiRequest<AuditEvent[]>(`/api/cases/${id}/audit`, { analystId, signal });
+}
+
+export function getPolicy(analystId: string, signal?: AbortSignal): Promise<RiskPolicy> {
+  return apiRequest<RiskPolicy>('/api/policy', { analystId, signal });
+}
+
+export function getPolicyHistory(
+  analystId: string,
+  signal?: AbortSignal,
+): Promise<RiskPolicyChange[]> {
+  return apiRequest<RiskPolicyChange[]>('/api/policy/history', { analystId, signal });
+}
+
+export function putPolicy(
+  patch: RiskPolicyPatch,
+  analystId: string,
+): Promise<RiskPolicyUpdateResponse> {
+  return apiRequest<RiskPolicyUpdateResponse>('/api/policy', {
+    method: 'PUT',
+    body: patch,
+    analystId,
+  });
 }
 
 export function postCaseAction(

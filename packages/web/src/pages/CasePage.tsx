@@ -164,6 +164,10 @@ function CustomerSection({ customer }: { customer: Customer }) {
     ['Expected monthly volume', formatUsd(customer.expectedMonthlyVolumeUsd)],
     ['Source of funds', humanize(customer.sourceOfFunds)],
     ['ID document type', humanize(customer.idDocumentType)],
+    [
+      'ID document expires',
+      customer.idDocumentExpiresAt ? formatDate(customer.idDocumentExpiresAt) : '—',
+    ],
     ['ID document verified', verified(customer.idDocumentVerified)],
     ['Address verified', verified(customer.addressVerified)],
     ['PEP flag', flag(customer.pepFlag)],

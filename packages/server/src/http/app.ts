@@ -9,13 +9,16 @@ import { z } from 'zod';
 import type { Db } from '../db.js';
 import { ApiError, notFound, unauthorized } from '../errors.js';
 import { explainRisk } from '../domain/risk.js';
+import { policyPatchSchema } from '../domain/policy.js';
 import { getAllowedActions, actionBodySchema } from '../domain/transitions.js';
 import { getAnalyst, listAnalysts } from '../repo/analysts.js';
 import { CASE_SORTS, caseStats, getCase, listCases } from '../repo/cases.js';
 import { getCustomer } from '../repo/customers.js';
 import { listAuditEvents } from '../repo/audit.js';
 import { listSignals } from '../repo/signals.js';
+import { listPolicyChanges, loadPolicy } from '../repo/policy.js';
 import { applyCaseAction } from '../services/caseService.js';
+import { getPolicyView, updatePolicy } from '../services/policyService.js';
 import type { Analyst } from '../types.js';
 
 declare module 'express-serve-static-core' {
@@ -133,7 +136,23 @@ export function createApp(db: Db): Express {
     if (!kase) return next(notFound(`Case '${caseId}' not found.`));
     const customer = getCustomer(db, kase.customerId);
     if (!customer) return next(notFound(`Customer '${kase.customerId}' not found.`));
-    res.json(explainRisk(kase.id, customer, new Date()));
+    res.json(explainRisk(kase.id, customer, new Date(), loadPolicy(db)));
+  });
+
+  app.get('/api/policy', (_req, res) => {
+    res.json(getPolicyView(db));
+  });
+
+  app.get('/api/policy/history', (_req, res) => {
+    res.json(listPolicyChanges(db));
+  });
+
+  app.put('/api/policy', resolveAnalyst(true), (req, res, next) => {
+    const parsed = policyPatchSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return next(new ApiError(400, 'VALIDATION_ERROR', 'Invalid policy body.', parsed.error.issues));
+    }
+    res.json(updatePolicy(db, req.analyst as Analyst, parsed.data));
   });
 
   app.get('/api/cases/:id/audit', (req, res, next) => {
