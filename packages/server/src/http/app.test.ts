@@ -1,9 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import { openDb, type Db } from '../db.js';
 import { createApp } from './app.js';
 import { computeEventHash, GENESIS_HASH, verifyChain } from '../domain/audit.js';
-import type { CaseStatus } from '../types.js';
+import { computeRisk } from '../domain/risk.js';
+import type { CaseStatus, Customer, KycCase, RiskExplanation, RiskSignal } from '../types.js';
 
 let db: Db;
 let app: ReturnType<typeof createApp>;
@@ -61,7 +62,10 @@ beforeEach(() => {
   app = createApp(db);
 });
 
-afterEach(() => db.close());
+afterEach(() => {
+  vi.useRealTimers();
+  db.close();
+});
 
 describe('HTTP API', () => {
   it('GET /api/health', async () => {
@@ -154,6 +158,76 @@ describe('HTTP API', () => {
     expect(res.status).toBe(200);
     expect(res.body.caseId).toBe('c-1');
     expect(res.body.thresholds).toEqual({ medium: 30, high: 60 });
+  });
+
+  it('risk explanation preserves detail scores and evidence across customer and clock drift without writes', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-06-01T00:00:00Z'));
+    db.prepare("UPDATE cases SET risk_score = 65 WHERE id = 'c-1'").run();
+    db.prepare("UPDATE customers SET account_opened_at = '2026-05-20T00:00:00Z' WHERE id = 'c-1-cust'").run();
+    const insertSignal = db.prepare(`INSERT INTO risk_signals
+      (id, case_id, code, title, description, severity, weight) VALUES (?, 'c-1', ?, ?, ?, ?, ?)`);
+    insertSignal.run(
+      'saved-new-account', 'NEW_ACCOUNT', 'New account',
+      'Account opened 3 day(s) ago (< 30 days).', 'low', 5,
+    );
+    insertSignal.run(
+      'saved-sanctions', 'SANCTIONS_HIT', 'Sanctions list match',
+      'Potential sanctions match recorded at initial review.', 'high', 60,
+    );
+    const changesBefore = db.prepare('SELECT total_changes() AS count').get();
+    const detailResponse = await authenticated().get('/api/cases/c-1').expect(200);
+    const detail = detailResponse.body as KycCase & { customer: Customer; signals: RiskSignal[] };
+    expect(computeRisk(detail.customer, new Date()).score).toBe(5);
+
+    const response = await authenticated().get('/api/cases/c-1/risk-explanation').expect(200);
+    const explanation = response.body as RiskExplanation;
+    expect(explanation).toMatchObject({
+      caseId: detail.id,
+      riskScore: detail.riskScore,
+      riskLevel: detail.riskLevel,
+      rawScore: 65,
+      scoreCapped: false,
+    });
+    expect(explanation.factors).toEqual(detail.signals.map((s, index) => ({
+      signalId: s.id,
+      code: s.code,
+      title: s.title,
+      description: s.description,
+      severity: s.severity,
+      weight: s.weight,
+      contributionPct: [92, 8][index],
+    })));
+    expect(explanation.primaryDriver).toEqual(explanation.factors[0]);
+    expect(explanation.primaryDriver?.signalId).toBe('saved-sanctions');
+
+    vi.setSystemTime(new Date('2030-06-01T00:00:00Z'));
+    expect(computeRisk(detail.customer, new Date()).score).toBe(0);
+    const later = await authenticated().get('/api/cases/c-1/risk-explanation').expect(200);
+    expect(later.body).toEqual(explanation);
+    expect((await authenticated().get('/api/cases/c-1').expect(200)).body).toEqual(detail);
+    expect(db.prepare('SELECT total_changes() AS count').get()).toEqual(changesBefore);
+  });
+
+  it('risk explanation preserves legacy scores when there are no recorded signals', async () => {
+    const detail = await authenticated().get('/api/cases/c-1').expect(200);
+    const res = await authenticated().get('/api/cases/c-1/risk-explanation').expect(200);
+    expect(res.body).toMatchObject({
+      riskScore: detail.body.riskScore,
+      riskLevel: detail.body.riskLevel,
+      rawScore: 0,
+      scoreCapped: false,
+      factors: [],
+      primaryDriver: null,
+    });
+    expect(res.body.summary).toContain('no risk signals were recorded');
+    expect(res.body.summary).toContain('recorded score does not match');
+  });
+
+  it('GET /api/cases/:id/risk-explanation unknown → 404 NOT_FOUND', async () => {
+    const res = await authenticated().get('/api/cases/nope/risk-explanation');
+    expect(res.status).toBe(404);
+    expect(res.body.error.code).toBe('NOT_FOUND');
   });
 
   it('GET /api/cases/:id/audit returns events ascending', async () => {
