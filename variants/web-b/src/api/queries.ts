@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { apiFetch } from './client';
+import { ApiRequestError } from './client';
+import { useAnalyst } from '@/lib/analyst';
 import type {
   Analyst,
   AuditEvent,
@@ -21,22 +22,29 @@ export const queryKeys = {
 };
 
 const readRetry = (failureCount: number, error: unknown): boolean => {
-  if (typeof error === 'object' && error !== null && 'status' in error && error.status === 404)
+  if (
+    (error instanceof ApiRequestError && [401, 403, 404].includes(error.status)) ||
+    (error instanceof Error && error.name === 'AbortError')
+  )
     return false;
   return failureCount < 1;
 };
 
 export function useAnalysts() {
+  const { request, user } = useAnalyst();
   return useQuery({
     queryKey: queryKeys.analysts,
-    queryFn: () => apiFetch<Analyst[]>('/api/analysts'),
+    queryFn: ({ signal }) => request<Analyst[]>('/api/analysts', { signal }),
+    enabled: Boolean(user),
     retry: readRetry,
   });
 }
 export function useCaseStats() {
+  const { request, user } = useAnalyst();
   return useQuery({
     queryKey: queryKeys.stats,
-    queryFn: () => apiFetch<CaseStats>('/api/cases/stats'),
+    queryFn: ({ signal }) => request<CaseStats>('/api/cases/stats', { signal }),
+    enabled: Boolean(user),
     retry: readRetry,
   });
 }
@@ -52,42 +60,49 @@ export function filtersToQuery(filters: QueueFilters, pageSize = 25): string {
   return params.toString();
 }
 export function useCases(params: QueueFilters) {
+  const { request, user } = useAnalyst();
   const query = filtersToQuery(params);
   return useQuery({
     queryKey: queryKeys.cases(query),
-    queryFn: () => apiFetch<CaseListResponse>(`/api/cases?${query}`),
+    queryFn: ({ signal }) => request<CaseListResponse>(`/api/cases?${query}`, { signal }),
+    enabled: Boolean(user),
     retry: readRetry,
   });
 }
 export function useCase(id: string) {
+  const { request, user } = useAnalyst();
   return useQuery({
     queryKey: queryKeys.case(id),
-    queryFn: () => apiFetch<CaseDetail>(`/api/cases/${id}`),
+    queryFn: ({ signal }) => request<CaseDetail>(`/api/cases/${id}`, { signal }),
     retry: readRetry,
-    enabled: Boolean(id),
+    enabled: Boolean(user && id),
   });
 }
 export function useRiskExplanation(id: string) {
+  const { request, user } = useAnalyst();
   return useQuery({
     queryKey: queryKeys.explanation(id),
-    queryFn: () => apiFetch<RiskExplanation>(`/api/cases/${id}/risk-explanation`),
+    queryFn: ({ signal }) =>
+      request<RiskExplanation>(`/api/cases/${id}/risk-explanation`, { signal }),
     retry: readRetry,
-    enabled: Boolean(id),
+    enabled: Boolean(user && id),
   });
 }
 export function useAudit(id: string) {
+  const { request, user } = useAnalyst();
   return useQuery({
     queryKey: queryKeys.audit(id),
-    queryFn: () => apiFetch<AuditEvent[]>(`/api/cases/${id}/audit`),
+    queryFn: ({ signal }) => request<AuditEvent[]>(`/api/cases/${id}/audit`, { signal }),
     retry: readRetry,
-    enabled: Boolean(id),
+    enabled: Boolean(user && id),
   });
 }
 export function useCaseAction(id: string) {
+  const { request } = useAnalyst();
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: ({ action, note }: { action: CaseAction; note?: string }) =>
-      apiFetch<CaseDetail>(`/api/cases/${id}/actions`, {
+      request<CaseDetail>(`/api/cases/${id}/actions`, {
         method: 'POST',
         body: JSON.stringify({ action, ...(note ? { note } : {}) }),
       }),

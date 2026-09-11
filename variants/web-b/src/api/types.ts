@@ -2,12 +2,15 @@ export type CaseStatus = 'pending' | 'in_review' | 'approved' | 'rejected' | 'es
 export type RiskLevel = 'low' | 'medium' | 'high';
 export type CaseAction = 'approve' | 'reject' | 'escalate' | 'start_review';
 export type SignalSeverity = 'low' | 'medium' | 'high';
-export type AnalystRole = 'analyst' | 'senior_analyst';
+export type AnalystRole = 'analyst' | 'senior_analyst' | 'compliance_manager';
 
 export interface Analyst {
   id: string;
   name: string;
   role: AnalystRole;
+}
+export interface CurrentAnalyst extends Analyst {
+  permissions: string[];
 }
 export interface Customer {
   id: string;
