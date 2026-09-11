@@ -1,5 +1,6 @@
 import { BrowserRouter, NavLink, Outlet, Route, Routes, useLocation } from 'react-router-dom';
 import { AnalystProvider, useAnalyst } from './analyst/AnalystContext';
+import { AnalystSelector } from './analyst/AnalystSelector';
 import { CasePage } from './pages/CasePage';
 import { NotFoundPage } from './pages/NotFoundPage';
 import { QueuePage } from './pages/QueuePage';
@@ -30,17 +31,7 @@ function Layout() {
           <NavLink to="/refunds">Refunds</NavLink>
           <NavLink to="/policy">KYC policy</NavLink>
         </nav>
-        <label style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-          Demo identity
-          <select value={analystId} onChange={(e) => setAnalystId(e.target.value)}>
-            {analysts.length === 0 ? <option value={analystId}>{analystId}</option> : null}
-            {analysts.map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.name} ({a.role})
-              </option>
-            ))}
-          </select>
-        </label>
+        <AnalystSelector analystId={analystId} analysts={analysts} onChange={setAnalystId} />
       </header>
       <Outlet key={`${analystId}:${pathname}`} />
     </div>
