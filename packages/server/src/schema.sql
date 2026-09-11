@@ -36,6 +36,12 @@ CREATE TABLE IF NOT EXISTS cases (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS case_risk_thresholds (
+  case_id TEXT PRIMARY KEY REFERENCES cases(id),
+  medium INTEGER NOT NULL CHECK (medium BETWEEN 1 AND 99),
+  high INTEGER NOT NULL CHECK (high > medium AND high <= 100)
+);
+
 CREATE TABLE IF NOT EXISTS risk_signals (
   id TEXT PRIMARY KEY,
   case_id TEXT NOT NULL REFERENCES cases(id),
@@ -46,9 +52,35 @@ CREATE TABLE IF NOT EXISTS risk_signals (
   weight INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS refunds (
+  id TEXT PRIMARY KEY,
+  reference TEXT NOT NULL UNIQUE,
+  customer_id TEXT NOT NULL REFERENCES customers(id),
+  amount_cents INTEGER NOT NULL CHECK (
+    typeof(amount_cents) = 'integer' AND amount_cents > 0 AND amount_cents <= transaction_amount_cents
+  ),
+  currency TEXT NOT NULL CHECK (currency = 'USD'),
+  status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'rejected')),
+  risk_level TEXT NOT NULL CHECK (risk_level IN ('low', 'medium', 'high')),
+  reason TEXT NOT NULL CHECK (length(trim(reason)) > 0),
+  transaction_reference TEXT NOT NULL,
+  transaction_amount_cents INTEGER NOT NULL CHECK (
+    typeof(transaction_amount_cents) = 'integer'
+    AND transaction_amount_cents > 0 AND transaction_amount_cents <= 9007199254740991
+  ),
+  transaction_occurred_at TEXT NOT NULL,
+  risk_indicators TEXT NOT NULL CHECK (json_valid(risk_indicators) AND json_type(risk_indicators) = 'array'),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS refunds_status_created_at ON refunds(status, created_at);
+CREATE INDEX IF NOT EXISTS refunds_customer_id ON refunds(customer_id);
+
 CREATE TABLE IF NOT EXISTS audit_events (
   id TEXT PRIMARY KEY,
-  case_id TEXT NOT NULL REFERENCES cases(id),
+  case_id TEXT REFERENCES cases(id),
+  refund_id TEXT REFERENCES refunds(id),
   sequence INTEGER NOT NULL,
   actor_id TEXT NOT NULL,
   actor_name TEXT NOT NULL,
@@ -59,7 +91,9 @@ CREATE TABLE IF NOT EXISTS audit_events (
   created_at TEXT NOT NULL,
   prev_hash TEXT NOT NULL,
   hash TEXT NOT NULL,
-  UNIQUE (case_id, sequence)
+  CHECK ((case_id IS NOT NULL) + (refund_id IS NOT NULL) = 1),
+  UNIQUE (case_id, sequence),
+  UNIQUE (refund_id, sequence)
 );
 
 CREATE TABLE IF NOT EXISTS risk_policy (
@@ -89,6 +123,13 @@ BEGIN
   SELECT RAISE(ABORT, 'risk_policy_changes is append-only');
 END;
 
+CREATE TRIGGER IF NOT EXISTS risk_policy_changes_no_replace
+BEFORE INSERT ON risk_policy_changes
+WHEN EXISTS (SELECT 1 FROM risk_policy_changes WHERE id = NEW.id OR version = NEW.version)
+BEGIN
+  SELECT RAISE(ABORT, 'risk_policy_changes is append-only');
+END;
+
 CREATE TRIGGER IF NOT EXISTS audit_events_no_update
 BEFORE UPDATE ON audit_events
 BEGIN
@@ -99,4 +140,43 @@ CREATE TRIGGER IF NOT EXISTS audit_events_no_delete
 BEFORE DELETE ON audit_events
 BEGIN
   SELECT RAISE(ABORT, 'audit_events is append-only');
+END;
+
+CREATE TABLE IF NOT EXISTS review_policy (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  version INTEGER NOT NULL CHECK (version >= 1),
+  require_approval_note INTEGER NOT NULL CHECK (require_approval_note IN (0, 1)),
+  updated_at TEXT NOT NULL,
+  updated_by TEXT REFERENCES analysts(id)
+);
+
+INSERT OR IGNORE INTO review_policy
+  (id, version, require_approval_note, updated_at, updated_by)
+VALUES (1, 1, 1, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), NULL);
+
+CREATE TABLE IF NOT EXISTS policy_audit_events (
+  id TEXT PRIMARY KEY,
+  version INTEGER NOT NULL UNIQUE,
+  actor_id TEXT NOT NULL,
+  actor_name TEXT NOT NULL,
+  actor_role TEXT NOT NULL,
+  action TEXT NOT NULL CHECK (action = 'policy_updated'),
+  created_at TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  previous_state TEXT NOT NULL,
+  new_state TEXT NOT NULL,
+  prev_hash TEXT NOT NULL,
+  hash TEXT NOT NULL
+);
+
+CREATE TRIGGER IF NOT EXISTS policy_audit_events_no_update
+BEFORE UPDATE ON policy_audit_events
+BEGIN
+  SELECT RAISE(ABORT, 'policy_audit_events is append-only');
+END;
+
+CREATE TRIGGER IF NOT EXISTS policy_audit_events_no_delete
+BEFORE DELETE ON policy_audit_events
+BEGIN
+  SELECT RAISE(ABORT, 'policy_audit_events is append-only');
 END;

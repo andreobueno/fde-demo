@@ -7,6 +7,10 @@ import type {
   CaseDetail,
   CaseListResponse,
   CaseStats,
+  CurrentAnalyst,
+  Policy,
+  PolicyAuditEvent,
+  PolicyUpdate,
   RiskExplanation,
   RiskPolicy,
   RiskPolicyChange,
@@ -40,6 +44,10 @@ interface ApiRequestOptions {
 }
 
 export async function apiRequest<T>(path: string, options: ApiRequestOptions): Promise<T> {
+  options.signal?.throwIfAborted();
+  if (options.analystId.trim() === '') {
+    throw new ApiError(401, 'UNAUTHORIZED', 'Select a demo identity to continue.');
+  }
   const method = options.method ?? 'GET';
   const headers: Record<string, string> = {
     'content-type': 'application/json',
@@ -78,11 +86,42 @@ export async function apiRequest<T>(path: string, options: ApiRequestOptions): P
     throw new ApiError(response.status, code, message, details);
   }
 
-  return (await response.json()) as T;
+  const result = (await response.json()) as T;
+  options.signal?.throwIfAborted();
+  return result;
 }
 
 export function getAnalysts(analystId: string, signal?: AbortSignal): Promise<Analyst[]> {
   return apiRequest<Analyst[]>('/api/analysts', { analystId, signal });
+}
+
+export function getMe(analystId: string, signal?: AbortSignal): Promise<CurrentAnalyst> {
+  return apiRequest<CurrentAnalyst>('/api/me', { analystId, signal });
+}
+
+export function getPolicy(analystId: string, signal?: AbortSignal): Promise<Policy> {
+  return apiRequest<Policy>('/api/policy', { analystId, signal });
+}
+
+export function getPolicyAudit(analystId: string, signal?: AbortSignal): Promise<PolicyAuditEvent[]> {
+  return apiRequest<PolicyAuditEvent[]>('/api/policy/audit', { analystId, signal });
+}
+
+export function updatePolicy(
+  update: PolicyUpdate,
+  analystId: string,
+  signal?: AbortSignal,
+): Promise<Policy> {
+  return apiRequest<Policy>('/api/policy', {
+    method: 'PUT',
+    body: {
+      version: update.version,
+      requireApprovalNote: update.requireApprovalNote,
+      reason: update.reason.trim(),
+    },
+    analystId,
+    signal,
+  });
 }
 
 export function getCaseStats(analystId: string, signal?: AbortSignal): Promise<CaseStats> {
@@ -123,25 +162,27 @@ export function getAudit(
   return apiRequest<AuditEvent[]>(`/api/cases/${id}/audit`, { analystId, signal });
 }
 
-export function getPolicy(analystId: string, signal?: AbortSignal): Promise<RiskPolicy> {
-  return apiRequest<RiskPolicy>('/api/policy', { analystId, signal });
+export function getRiskPolicy(analystId: string, signal?: AbortSignal): Promise<RiskPolicy> {
+  return apiRequest<RiskPolicy>('/api/risk-policy', { analystId, signal });
 }
 
-export function getPolicyHistory(
+export function getRiskPolicyHistory(
   analystId: string,
   signal?: AbortSignal,
 ): Promise<RiskPolicyChange[]> {
-  return apiRequest<RiskPolicyChange[]>('/api/policy/history', { analystId, signal });
+  return apiRequest<RiskPolicyChange[]>('/api/risk-policy/history', { analystId, signal });
 }
 
-export function putPolicy(
+export function putRiskPolicy(
   patch: RiskPolicyPatch,
   analystId: string,
+  signal?: AbortSignal,
 ): Promise<RiskPolicyUpdateResponse> {
-  return apiRequest<RiskPolicyUpdateResponse>('/api/policy', {
+  return apiRequest<RiskPolicyUpdateResponse>('/api/risk-policy', {
     method: 'PUT',
     body: patch,
     analystId,
+    signal,
   });
 }
 
@@ -150,10 +191,12 @@ export function postCaseAction(
   action: CaseAction,
   note: string,
   analystId: string,
+  signal?: AbortSignal,
 ): Promise<ActionResponse> {
   return apiRequest<ActionResponse>(`/api/cases/${id}/actions`, {
     method: 'POST',
-    body: note.trim() === '' ? { action } : { action, note },
+    body: note.trim() === '' ? { action } : { action, note: note.trim() },
     analystId,
+    signal,
   });
 }

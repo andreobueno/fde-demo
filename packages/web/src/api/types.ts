@@ -20,6 +20,37 @@ export interface Analyst {
   role: AnalystRole;
 }
 
+export interface CurrentAnalyst extends Analyst {
+  permissions: string[];
+}
+
+export interface Policy {
+  version: number;
+  requireApprovalNote: boolean;
+  updatedAt: string;
+  updatedBy: string | null;
+}
+
+export interface PolicyUpdate {
+  version: number;
+  requireApprovalNote: boolean;
+  reason: string;
+}
+
+export interface PolicyAuditEvent {
+  id: string;
+  actorId: string;
+  actorName: string;
+  actorRole: AnalystRole;
+  action: 'policy_updated';
+  createdAt: string;
+  reason: string;
+  previousState: Policy;
+  newState: Policy;
+  prevHash: string;
+  hash: string;
+}
+
 export interface Customer {
   id: string;
   fullName: string;
@@ -79,6 +110,7 @@ export interface AuditEvent {
 }
 
 export interface RiskFactor {
+  signalId: string;
   code: string;
   title: string;
   description: string;
@@ -91,9 +123,12 @@ export interface RiskExplanation {
   caseId: string;
   riskScore: number;
   riskLevel: RiskLevel;
+  rawScore: number;
+  scoreCapped: boolean;
   summary: string;
   thresholds: { medium: number; high: number };
   factors: RiskFactor[];
+  primaryDriver: RiskFactor | null;
 }
 
 export interface CaseDetail extends KycCase {
@@ -101,6 +136,7 @@ export interface CaseDetail extends KycCase {
   signals: RiskSignal[];
   audit: AuditEvent[];
   allowedActions: CaseAction[];
+  approvalNoteRequired: boolean;
 }
 
 export interface CaseListResponse {
@@ -119,6 +155,7 @@ export interface CaseStats {
 export interface ActionResponse extends KycCase {
   audit: AuditEvent[];
   allowedActions: CaseAction[];
+  approvalNoteRequired: boolean;
 }
 
 export interface RiskThresholds {
@@ -169,4 +206,49 @@ export interface ApiErrorBody {
     message: string;
     details?: unknown;
   };
+}
+
+export type RefundStatus = 'pending' | 'approved' | 'rejected';
+export type RefundAction = 'approve' | 'reject';
+export type RefundSort = 'reference' | 'customer' | 'amountCents' | 'status' | 'riskLevel' | 'createdAt';
+export type RefundAmountBand = 'all' | 'under_1000' | '1000_to_5000' | 'over_5000';
+
+export interface RefundAuditEvent extends Omit<AuditEvent, 'caseId'> {
+  refundId: string;
+}
+
+export interface Refund {
+  id: string;
+  reference: string;
+  customerId: string;
+  customer: Pick<Customer, 'id' | 'fullName' | 'email'>;
+  amountCents: number;
+  currency: 'USD';
+  status: RefundStatus;
+  riskLevel: RiskLevel;
+  reason: string;
+  originalTransaction: { reference: string; amountCents: number; occurredAt: string };
+  riskIndicators: { code: string; title: string; description: string; severity: SignalSeverity }[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RefundDetail extends Refund {
+  allowedActions: RefundAction[];
+  approvalNoteRequired: true;
+  audit: RefundAuditEvent[];
+}
+
+export interface RefundListResponse {
+  items: Refund[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+export interface RefundStats {
+  pendingCount: number;
+  pendingAmountCents: number;
+  approvedToday: number;
+  rejectedToday: number;
 }

@@ -1,0 +1,409 @@
+.page {
+  padding: 16px 24px 40px;
+  max-width: 1100px;
+}
+
+.back {
+  display: inline-block;
+  margin-bottom: 12px;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+
+.header h1 {
+  font-size: 20px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.headerMeta {
+  color: var(--color-muted);
+  font-size: 13px;
+  width: 100%;
+}
+
+.section {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.section h2 {
+  font-size: 15px;
+  margin-bottom: 12px;
+}
+
+.defList {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  row-gap: 6px;
+  column-gap: 16px;
+  margin: 0;
+}
+
+.defList dt {
+  color: var(--color-muted);
+}
+
+.defList dd {
+  margin: 0;
+}
+
+.ok {
+  color: var(--badge-low-fg);
+}
+
+.bad {
+  color: var(--badge-high-fg);
+}
+
+.riskExplanation {
+  --risk-accent: var(--badge-low-fg);
+  --risk-tint: var(--badge-low-bg);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-top: 4px solid var(--risk-accent);
+  border-radius: 6px;
+  padding: 20px;
+  margin-bottom: 16px;
+}
+
+.riskExplanation.medium {
+  --risk-accent: var(--badge-medium-fg);
+  --risk-tint: var(--badge-medium-bg);
+}
+
+.riskExplanation.high {
+  --risk-accent: var(--badge-high-fg);
+  --risk-tint: var(--badge-high-bg);
+}
+
+.riskHeading {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.riskHeading h2 {
+  font-size: 18px;
+  line-height: 1.3;
+  text-transform: uppercase;
+  letter-spacing: 0.015em;
+}
+
+.eyebrow {
+  color: var(--risk-accent);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  margin-bottom: 5px;
+  text-transform: uppercase;
+}
+
+.deterministic {
+  background: var(--risk-tint);
+  border-radius: 999px;
+  color: var(--risk-accent);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 9px;
+  white-space: nowrap;
+}
+
+.riskOverview {
+  display: grid;
+  grid-template-columns: 190px minmax(0, 1fr);
+  gap: 28px;
+}
+
+.scorePanel {
+  border-right: 1px solid var(--color-border);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding-right: 28px;
+}
+
+.scoreLabel {
+  color: var(--color-muted);
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+
+.score {
+  color: var(--risk-accent);
+  font-size: 44px;
+  line-height: 1;
+}
+
+.scoreMax {
+  color: var(--color-muted);
+  font-size: 14px;
+}
+
+.riskLevelBadge {
+  margin-top: 9px;
+}
+
+.scoreTrack {
+  background: #e5e8ec;
+  border-radius: 4px;
+  height: 6px;
+  margin-top: 14px;
+  overflow: hidden;
+  width: 100%;
+}
+
+.scoreFill {
+  background: var(--risk-accent);
+  display: block;
+  height: 100%;
+}
+
+.threshold {
+  color: var(--color-muted);
+  font-size: 11px;
+  margin-top: 5px;
+}
+
+.factorPanel h3 {
+  font-size: 14px;
+  margin-bottom: 8px;
+}
+
+.factorList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.factorRow {
+  align-items: center;
+  border-bottom: 1px solid var(--color-border);
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 10px minmax(0, 1fr) auto;
+  min-height: 34px;
+}
+
+.factorRow:last-child {
+  border-bottom: 0;
+}
+
+.severityDot {
+  background: var(--badge-low-fg);
+  border-radius: 50%;
+  height: 9px;
+  width: 9px;
+}
+
+.severity_medium {
+  background: var(--badge-medium-fg);
+}
+
+.severity_high {
+  background: var(--badge-high-fg);
+}
+
+.factorTitle {
+  font-weight: 600;
+}
+
+.factorWeight {
+  color: var(--risk-accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.noFactors {
+  color: var(--color-muted);
+  margin: 12px 0 0;
+}
+
+.primaryDriver {
+  align-items: baseline;
+  background: var(--risk-tint);
+  border-left: 3px solid var(--risk-accent);
+  display: flex;
+  gap: 8px;
+  margin-top: 18px;
+  padding: 10px 12px;
+}
+
+.primaryDriver > span:first-child {
+  color: var(--color-muted);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.primaryDriver > span:last-child {
+  color: var(--risk-accent);
+  font-weight: 600;
+  margin-left: auto;
+}
+
+.evidence {
+  border-top: 1px solid var(--color-border);
+  margin-top: 16px;
+  padding-top: 13px;
+}
+
+.evidence summary {
+  color: var(--color-primary);
+  cursor: pointer;
+  font-weight: 600;
+  width: fit-content;
+}
+
+.evidence summary:hover {
+  text-decoration: underline;
+}
+
+.evidenceIntro {
+  color: var(--color-muted);
+  margin: 12px 0;
+}
+
+.evidenceList {
+  display: grid;
+  gap: 8px;
+}
+
+.evidenceItem {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  padding: 10px 12px;
+}
+
+.evidenceHead {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.evidenceHead > span:last-child {
+  color: var(--color-muted);
+  font-size: 12px;
+  margin-left: auto;
+}
+
+.evidenceItem p {
+  margin: 8px 0;
+}
+
+.evidenceItem code {
+  color: var(--color-muted);
+  font-size: 11px;
+}
+
+.explanationFootnote {
+  color: var(--color-muted);
+  font-size: 11px;
+  margin: 14px 0 0;
+}
+
+@media (max-width: 700px) {
+  .riskHeading,
+  .primaryDriver {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .riskOverview {
+    grid-template-columns: 1fr;
+  }
+
+  .scorePanel {
+    border-bottom: 1px solid var(--color-border);
+    border-right: 0;
+    padding: 0 0 18px;
+  }
+
+  .scoreTrack {
+    max-width: 240px;
+  }
+
+  .primaryDriver > span:last-child,
+  .evidenceHead > span:last-child {
+    margin-left: 0;
+  }
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.closed {
+  color: var(--color-muted);
+}
+
+.chain {
+  font-size: 13px;
+  margin-bottom: 10px;
+}
+
+.chainOk {
+  color: var(--badge-low-fg);
+}
+
+.chainBad {
+  color: var(--badge-high-fg);
+}
+
+.event {
+  border-left: 2px solid var(--color-border);
+  padding: 0 0 14px 14px;
+  position: relative;
+}
+
+.event::before {
+  content: '';
+  position: absolute;
+  left: -5px;
+  top: 4px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-muted);
+}
+
+.eventHead {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.eventActor {
+  font-weight: 600;
+}
+
+.eventTime {
+  color: var(--color-muted);
+  font-size: 12px;
+}
+
+.eventNote {
+  color: var(--color-muted);
+  margin-top: 4px;
+}
+
+.eventHash {
+  color: var(--color-muted);
+  font-size: 12px;
+  margin-top: 4px;
+}

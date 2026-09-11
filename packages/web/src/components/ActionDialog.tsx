@@ -1,31 +1,30 @@
 import { useEffect, useRef, useState } from 'react';
 import { ApiError } from '../api/client';
-import type { CaseAction, RiskLevel } from '../api/types';
+import type { CaseAction } from '../api/types';
 import { ACTION_LABELS, noteIsRequired, validateActionNote } from '../lib/actionRules';
 import styles from './ActionDialog.module.css';
 
 interface ActionDialogProps {
   action: CaseAction;
-  riskLevel: RiskLevel;
-  caseReference: string;
+  approvalNoteRequired: boolean;
+  signal: AbortSignal;
+  subjectLabel: string;
   onClose: () => void;
   onSubmit: (note: string) => Promise<void>;
 }
 
-function helperText(action: CaseAction, riskLevel: RiskLevel): string {
-  if (action === 'reject' || action === 'escalate') {
+function helperText(action: CaseAction, approvalNoteRequired: boolean): string {
+  if (noteIsRequired(action, approvalNoteRequired)) {
     return 'Required, 10–1000 characters.';
-  }
-  if (action === 'approve' && riskLevel === 'high') {
-    return 'Required for high-risk approvals.';
   }
   return 'Optional, up to 1000 characters.';
 }
 
 export function ActionDialog({
   action,
-  riskLevel,
-  caseReference,
+  approvalNoteRequired,
+  signal,
+  subjectLabel,
   onClose,
   onSubmit,
 }: ActionDialogProps) {
@@ -66,12 +65,15 @@ export function ActionDialog({
     };
   }, [onClose]);
 
-  const validationError = validateActionNote(action, riskLevel, note);
+  const validationError = validateActionNote(action, approvalNoteRequired, note);
   const shownClientError = attempted ? validationError : clientError;
 
   const handleSubmit = async () => {
+    if (signal.aborted || submitting) {
+      return;
+    }
     setAttempted(true);
-    const err = validateActionNote(action, riskLevel, note);
+    const err = validateActionNote(action, approvalNoteRequired, note);
     if (err) {
       setClientError(err);
       return;
@@ -82,6 +84,9 @@ export function ActionDialog({
     try {
       await onSubmit(note.trim());
     } catch (e) {
+      if (signal.aborted) {
+        return;
+      }
       if (e instanceof ApiError) {
         const prefix =
           e.status === 409 || e.status === 403 || e.status === 400 ? `${e.code}: ` : '';
@@ -96,10 +101,10 @@ export function ActionDialog({
   return (
     <dialog ref={dialogRef} className={styles.dialog}>
       <h2 className={styles.title}>
-        {ACTION_LABELS[action]} case {caseReference}
+        {ACTION_LABELS[action]} {subjectLabel}
       </h2>
       <label className={styles.label} htmlFor="action-note">
-        Note {noteIsRequired(action, riskLevel) ? '(required)' : '(optional)'}
+        Note {noteIsRequired(action, approvalNoteRequired) ? '(required)' : '(optional)'}
       </label>
       <textarea
         id="action-note"
@@ -109,11 +114,11 @@ export function ActionDialog({
         onChange={(e) => {
           setNote(e.target.value);
           if (attempted) {
-            setClientError(validateActionNote(action, riskLevel, e.target.value));
+            setClientError(validateActionNote(action, approvalNoteRequired, e.target.value));
           }
         }}
       />
-      <p className={styles.helper}>{helperText(action, riskLevel)}</p>
+      <p className={styles.helper}>{helperText(action, approvalNoteRequired)}</p>
       {shownClientError ? <p className={styles.error}>{shownClientError}</p> : null}
       {serverError ? (
         <p className={styles.error} role="alert">

@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkdirSync } from 'node:fs';
 import { schemaSql } from './schema.js';
+import { migrateAnalystRoles, migrateRefundAudit, migrateRiskPolicy } from './migrations.js';
 
 export type Db = Database.Database;
 
@@ -23,6 +24,15 @@ export function openDb(dbPath?: string): Db {
     db.pragma('journal_mode = WAL');
   }
   db.pragma('foreign_keys = ON');
-  db.exec(schemaSql());
+  db.pragma('recursive_triggers = ON');
+  try {
+    db.exec(schemaSql());
+    migrateAnalystRoles(db);
+    migrateRefundAudit(db);
+    migrateRiskPolicy(db);
+  } catch (error) {
+    db.close();
+    throw error;
+  }
   return db;
 }

@@ -1,10 +1,11 @@
 import { z } from 'zod';
 import type { AnalystRole, CaseAction, CaseStatus, RiskLevel } from '../types.js';
+import { hasPermission } from './authorization.js';
 
 export const actionBodySchema = z.object({
   action: z.enum(['approve', 'reject', 'escalate', 'start_review']),
-  note: z.string().max(1000).optional(),
-});
+  note: z.string().trim().max(1000).optional(),
+}).strict();
 
 export type ActionBody = z.infer<typeof actionBodySchema>;
 
@@ -21,18 +22,49 @@ const TARGET_STATUS: Record<CaseAction, CaseStatus> = {
   escalate: 'escalated',
 };
 
-export function getAllowedActions(status: CaseStatus, role: AnalystRole): CaseAction[] {
+function getLegalActions(status: CaseStatus): CaseAction[] {
   switch (status) {
     case 'pending':
       return ['start_review', 'approve', 'reject', 'escalate'];
     case 'in_review':
       return ['approve', 'reject', 'escalate'];
     case 'escalated':
-      return role === 'senior_analyst' ? ['approve', 'reject'] : [];
+      return ['approve', 'reject'];
     case 'approved':
     case 'rejected':
+    default:
       return [];
   }
+}
+
+function canPerformAction(role: AnalystRole, action: CaseAction, riskLevel: RiskLevel): boolean {
+  switch (action) {
+    case 'start_review':
+      return hasPermission(role, 'cases:review');
+    case 'escalate':
+      return hasPermission(role, 'cases:escalate');
+    case 'approve':
+    case 'reject':
+      switch (riskLevel) {
+        case 'low':
+        case 'medium':
+          return hasPermission(role, 'cases:decide_low_medium');
+        case 'high':
+          return hasPermission(role, 'cases:decide_high');
+        default:
+          return false;
+      }
+    default:
+      return false;
+  }
+}
+
+export function getAllowedActions(
+  status: CaseStatus,
+  role: AnalystRole,
+  riskLevel: RiskLevel,
+): CaseAction[] {
+  return getLegalActions(status).filter((action) => canPerformAction(role, action, riskLevel));
 }
 
 export function validateAction(input: {
@@ -41,22 +73,12 @@ export function validateAction(input: {
   riskLevel: RiskLevel;
   action: CaseAction;
   note?: string | undefined;
+  requireApprovalNote?: boolean;
 }): ActionResult {
-  const { status, role, riskLevel, action, note } = input;
+  const { status, role, riskLevel, action, note, requireApprovalNote = true } = input;
   const toStatus = TARGET_STATUS[action];
 
-  const transitionAllowed = (() => {
-    if (action === 'start_review') return status === 'pending';
-    if (status === 'pending' || status === 'in_review') {
-      return action === 'approve' || action === 'reject' || action === 'escalate';
-    }
-    if (status === 'escalated') {
-      return action === 'approve' || action === 'reject';
-    }
-    return false;
-  })();
-
-  if (!transitionAllowed) {
+  if (!getLegalActions(status).includes(action)) {
     return {
       ok: false,
       error: {
@@ -66,18 +88,22 @@ export function validateAction(input: {
     };
   }
 
-  if (status === 'escalated' && role !== 'senior_analyst') {
+  if (!canPerformAction(role, action, riskLevel)) {
     return {
       ok: false,
       error: {
         code: 'FORBIDDEN',
-        message: `Resolving an escalated case requires role 'senior_analyst'.`,
+        message: `Your role does not permit '${action}' on a '${riskLevel}' risk case.`,
       },
     };
   }
 
   const trimmed = note?.trim() ?? '';
-  if ((action === 'reject' || action === 'escalate') && (trimmed.length < 10 || trimmed.length > 1000)) {
+  const noteRequired =
+    action === 'reject' ||
+    action === 'escalate' ||
+    (action === 'approve' && (riskLevel === 'high' || requireApprovalNote));
+  if (noteRequired && (trimmed.length < 10 || trimmed.length > 1000)) {
     return {
       ok: false,
       error: {
@@ -93,21 +119,6 @@ export function validateAction(input: {
       error: {
         code: 'VALIDATION_ERROR',
         message: 'Note must be at most 1000 characters.',
-      },
-    };
-  }
-
-  if (
-    action === 'approve' &&
-    riskLevel === 'high' &&
-    (status === 'pending' || status === 'in_review') &&
-    trimmed.length === 0
-  ) {
-    return {
-      ok: false,
-      error: {
-        code: 'VALIDATION_ERROR',
-        message: 'Approving a high-risk case requires a note.',
       },
     };
   }

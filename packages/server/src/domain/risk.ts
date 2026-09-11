@@ -1,5 +1,6 @@
 import type {
   Customer,
+  KycCase,
   PolicyRuleCode,
   RiskExplanation,
   RiskLevel,
@@ -8,7 +9,7 @@ import type {
   RiskThresholds,
   SignalSeverity,
 } from '../types.js';
-import { DEFAULT_RISK_POLICY, ruleDef } from './policy.js';
+import { DEFAULT_RISK_POLICY, ruleDef } from './riskPolicy.js';
 
 export const RISK_THRESHOLDS = DEFAULT_RISK_POLICY.thresholds;
 
@@ -171,14 +172,8 @@ export function computeRisk(
   return { score, level: riskLevelFor(score, policy), signals };
 }
 
-export function explainRisk(
-  caseId: string,
-  customer: Customer,
-  now: Date,
-  policy: RiskPolicy = DEFAULT_RISK_POLICY,
-): RiskExplanation {
-  const { score, level, signals } = computeRisk(customer, now, policy);
-  return explainAssessment(caseId, score, level, signals, policy.thresholds);
+function compareStrings(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
 }
 
 /** Largest-remainder apportionment: integer shares of 100 that always sum to 100 (or all 0 when total is 0). */
@@ -199,16 +194,19 @@ function apportionPercentages(weights: number[]): number[] {
   return shares.map((s) => s.floor);
 }
 
-/** Explains an already-computed (persisted) assessment without re-scoring it. */
-export function explainAssessment(
-  caseId: string,
-  score: number,
-  level: RiskLevel,
-  signals: Signal[],
-  thresholds: RiskThresholds,
+export function explainRisk(
+  kase: Pick<KycCase, 'id' | 'riskScore' | 'riskLevel'>,
+  signals: readonly RiskSignal[],
+  thresholds: RiskThresholds = RISK_THRESHOLDS,
 ): RiskExplanation {
-  const percentages = apportionPercentages(signals.map((s) => s.weight));
-  const factors = signals.map((s, i) => ({
+  const { id: caseId, riskScore, riskLevel } = kase;
+  const sortedSignals = [...signals].sort((a, b) =>
+    b.weight - a.weight || compareStrings(a.code, b.code) || compareStrings(a.id, b.id),
+  );
+  const rawScore = sortedSignals.reduce((sum, s) => sum + s.weight, 0);
+  const percentages = apportionPercentages(sortedSignals.map((s) => s.weight));
+  const factors = sortedSignals.map((s, i) => ({
+    signalId: s.id,
     code: s.code,
     title: s.title,
     description: s.description,
@@ -216,16 +214,29 @@ export function explainAssessment(
     weight: s.weight,
     contributionPct: percentages[i] ?? 0,
   }));
+  const primaryDriver = factors[0] ?? null;
 
-  const summary =
-    signals.length === 0
-      ? `Case ${caseId} scored ${score} (${level} risk): no risk signals were triggered.`
-      : `Case ${caseId} scored ${score} (${level} risk) driven by ${signals.length} signal(s); top contributor: ${signals.reduce((a, b) => (b.weight > a.weight ? b : a)).title}.`;
+  let summary = `Case ${caseId} has a recorded score of ${riskScore} (${riskLevel} risk): ${
+    primaryDriver
+      ? `${factors.length} recorded signal(s) totaling ${rawScore} points; primary driver: ${primaryDriver.title}.`
+      : 'no risk signals were recorded.'
+  }`;
+  if (riskScore !== Math.min(Math.max(rawScore, 0), 100)) {
+    summary += ' The recorded score does not match the recorded weights after the 0-100 cap.';
+  }
+  const levelForScore =
+    riskScore >= thresholds.high ? 'high' : riskScore >= thresholds.medium ? 'medium' : 'low';
+  if (riskLevel !== levelForScore) {
+    summary += ' The recorded risk level does not match the score thresholds.';
+  }
 
   return {
     caseId,
-    riskScore: score,
-    riskLevel: level,
+    riskScore,
+    riskLevel,
+    rawScore,
+    scoreCapped: rawScore > 100,
+    primaryDriver,
     summary,
     thresholds: { ...thresholds },
     factors,

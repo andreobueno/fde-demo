@@ -1,79 +1,80 @@
 import type { Db } from '../db.js';
-import { DEFAULT_RISK_POLICY, POLICY_RULE_CODES } from '../domain/policy.js';
-import type { PolicyRuleCode, RiskPolicy, RiskPolicyChange } from '../types.js';
+import type { AnalystRole } from '../types.js';
+import { policySchema, type PolicyAuditEvent, type ReviewPolicy } from '../domain/policy.js';
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
+interface PolicyRow {
+  version: number;
+  require_approval_note: number;
+  updated_at: string;
+  updated_by: string | null;
+}
 
-function rowToPolicyChange(r: any): RiskPolicyChange {
+interface PolicyAuditRow {
+  id: string;
+  actor_id: string;
+  actor_name: string;
+  actor_role: AnalystRole;
+  action: 'policy_updated';
+  created_at: string;
+  reason: string;
+  previous_state: string;
+  new_state: string;
+  prev_hash: string;
+  hash: string;
+}
+
+export function getPolicy(db: Db): ReviewPolicy {
+  const row = db.prepare<[], PolicyRow>('SELECT * FROM review_policy WHERE id = 1').get();
+  if (!row) throw new Error('Review policy is missing.');
   return {
-    id: r.id,
-    version: r.version,
-    actorId: r.actor_id,
-    actorName: r.actor_name,
-    changes: JSON.parse(r.changes),
-    recomputedCases: r.recomputed_cases,
-    createdAt: r.created_at,
+    version: row.version,
+    requireApprovalNote: row.require_approval_note === 1,
+    updatedAt: row.updated_at,
+    updatedBy: row.updated_by,
   };
 }
 
-/** Reads the stored policy; any key not yet persisted falls back to the code default. */
-export function loadPolicy(db: Db): RiskPolicy {
-  const rows = db.prepare('SELECT key, value FROM risk_policy').all() as Array<{
-    key: string;
-    value: number;
-  }>;
-  const stored = new Map(rows.map((r) => [r.key, r.value]));
-  const weights = { ...DEFAULT_RISK_POLICY.weights };
-  for (const code of POLICY_RULE_CODES) {
-    const v = stored.get(`weights.${code}`);
-    if (v !== undefined) weights[code as PolicyRuleCode] = v;
-  }
-  return {
-    weights,
-    thresholds: {
-      medium: stored.get('thresholds.medium') ?? DEFAULT_RISK_POLICY.thresholds.medium,
-      high: stored.get('thresholds.high') ?? DEFAULT_RISK_POLICY.thresholds.high,
-    },
-  };
+export function savePolicy(db: Db, policy: ReviewPolicy): void {
+  db.prepare(`
+    UPDATE review_policy
+    SET version = ?, require_approval_note = ?, updated_at = ?, updated_by = ?
+    WHERE id = 1
+  `).run(policy.version, Number(policy.requireApprovalNote), policy.updatedAt, policy.updatedBy);
 }
 
-export function savePolicy(db: Db, policy: RiskPolicy): void {
-  const upsert = db.prepare(
-    'INSERT INTO risk_policy (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
+export function lastPolicyHash(db: Db): string | undefined {
+  return db.prepare<[], { hash: string }>(
+    'SELECT hash FROM policy_audit_events ORDER BY version DESC LIMIT 1',
+  ).get()?.hash;
+}
+
+export function insertPolicyAuditEvent(db: Db, event: PolicyAuditEvent): void {
+  db.prepare(`
+    INSERT INTO policy_audit_events
+      (id, version, actor_id, actor_name, actor_role, action, created_at,
+       reason, previous_state, new_state, prev_hash, hash)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    event.id, event.newState.version, event.actorId, event.actorName, event.actorRole,
+    event.action, event.createdAt, event.reason, JSON.stringify(event.previousState),
+    JSON.stringify(event.newState), event.prevHash, event.hash,
   );
-  for (const code of POLICY_RULE_CODES) {
-    upsert.run(`weights.${code}`, policy.weights[code]);
-  }
-  upsert.run('thresholds.medium', policy.thresholds.medium);
-  upsert.run('thresholds.high', policy.thresholds.high);
 }
 
-export function listPolicyChanges(db: Db): RiskPolicyChange[] {
-  return db
-    .prepare('SELECT * FROM risk_policy_changes ORDER BY version DESC')
-    .all()
-    .map(rowToPolicyChange);
-}
-
-export function latestPolicyChange(db: Db): RiskPolicyChange | null {
-  const row = db
-    .prepare('SELECT * FROM risk_policy_changes ORDER BY version DESC LIMIT 1')
-    .get();
-  return row ? rowToPolicyChange(row) : null;
-}
-
-export function insertPolicyChange(db: Db, change: RiskPolicyChange): void {
-  db.prepare(
-    `INSERT INTO risk_policy_changes
-     (id, version, actor_id, actor_name, changes, recomputed_cases, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
-    change.id,
-    change.version,
-    change.actorId,
-    change.actorName,
-    JSON.stringify(change.changes),
-    change.recomputedCases,
-    change.createdAt,
-  );
+export function listPolicyAuditEvents(db: Db): PolicyAuditEvent[] {
+  return db.prepare<[], PolicyAuditRow>(
+    'SELECT * FROM policy_audit_events ORDER BY version ASC',
+  ).all().map((row) => ({
+    id: row.id,
+    actorId: row.actor_id,
+    actorName: row.actor_name,
+    actorRole: row.actor_role,
+    action: row.action,
+    createdAt: row.created_at,
+    reason: row.reason,
+    previousState: policySchema.parse(JSON.parse(row.previous_state)),
+    newState: policySchema.parse(JSON.parse(row.new_state)),
+    prevHash: row.prev_hash,
+    hash: row.hash,
+  }));
 }

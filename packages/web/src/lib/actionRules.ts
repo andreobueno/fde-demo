@@ -1,4 +1,4 @@
-import type { CaseAction, RiskLevel } from '../api/types';
+import type { CaseAction } from '../api/types';
 
 export const ACTION_LABELS: Record<CaseAction, string> = {
   start_review: 'Start review',
@@ -7,48 +7,33 @@ export const ACTION_LABELS: Record<CaseAction, string> = {
   escalate: 'Escalate',
 };
 
-export function noteIsRequired(action: CaseAction, riskLevel: RiskLevel): boolean {
-  if (action === 'reject' || action === 'escalate') {
-    return true;
-  }
-  if (action === 'approve' && riskLevel === 'high') {
-    return true;
-  }
-  return false;
+export function noteIsRequired(action: CaseAction, approvalNoteRequired: boolean): boolean {
+  return action === 'reject' || action === 'escalate' ||
+    (action === 'approve' && approvalNoteRequired);
 }
 
 export function validateActionNote(
   action: CaseAction,
-  riskLevel: RiskLevel,
+  approvalNoteRequired: boolean,
   note: string,
 ): string | null {
+  return validateNote(note, noteIsRequired(action, approvalNoteRequired));
+}
+
+export function validateNote(note: string, required: boolean, label = 'Note'): string | null {
   const trimmed = note.trim();
 
-  if (action === 'reject' || action === 'escalate') {
+  if (required) {
     if (trimmed.length === 0) {
-      return 'A note is required for this action.';
+      return `${label} is required.`;
     }
     if (trimmed.length < 10) {
-      return 'Note must be at least 10 characters.';
+      return `${label} must be at least 10 characters.`;
     }
-    if (trimmed.length > 1000) {
-      return 'Note must be at most 1000 characters.';
-    }
-    return null;
-  }
-
-  if (action === 'approve') {
-    if (riskLevel === 'high' && trimmed.length === 0) {
-      return 'A note is required when approving a high-risk case.';
-    }
-    if (trimmed.length > 1000) {
-      return 'Note must be at most 1000 characters.';
-    }
-    return null;
   }
 
   if (trimmed.length > 1000) {
-    return 'Note must be at most 1000 characters.';
+    return `${label} must be at most 1000 characters.`;
   }
   return null;
 }

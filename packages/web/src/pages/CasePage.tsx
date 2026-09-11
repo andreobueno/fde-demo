@@ -1,24 +1,22 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { getCase, getRiskExplanation, postCaseAction } from '../api/client';
+import { ApiError, getCase, getRiskExplanation, postCaseAction } from '../api/client';
 import { useApi } from '../api/useApi';
 import { useAnalyst } from '../analyst/AnalystContext';
 import type {
-  AuditEvent,
   CaseAction,
-  CaseDetail,
   Customer,
   RiskExplanation,
 } from '../api/types';
 import { ActionDialog } from '../components/ActionDialog';
+import { AuditTimeline } from '../components/AuditTimeline';
 import { Badge } from '../components/Badge';
 import { ErrorState } from '../components/ErrorState';
 import { Loading } from '../components/Loading';
 import { Toast } from '../components/Toast';
 import { ACTION_LABELS } from '../lib/actionRules';
-import { verifyChain, type ChainVerification } from '../lib/auditChain';
 import { formatDate, formatDateTime, formatUsd, humanize } from '../lib/format';
-import styles from './CasePage.module.css';
+import styles from '../components/Detail.module.css';
 
 const ACTION_BUTTON_CLASS: Record<CaseAction, string> = {
   approve: 'primary',
@@ -29,7 +27,7 @@ const ACTION_BUTTON_CLASS: Record<CaseAction, string> = {
 
 export function CasePage() {
   const { id } = useParams<{ id: string }>();
-  const { analystId, analysts } = useAnalyst();
+  const { analystId, analysts, identitySignal } = useAnalyst();
   const [openAction, setOpenAction] = useState<CaseAction | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
@@ -60,7 +58,7 @@ export function CasePage() {
     );
   }
 
-  if (!caseResult.data) {
+  if (!caseResult.data || caseResult.loading) {
     return (
       <div className={styles.page}>
         <Loading />
@@ -71,10 +69,15 @@ export function CasePage() {
   const kase = caseResult.data;
 
   const handleSubmitAction = async (note: string) => {
+    identitySignal.throwIfAborted();
     if (!openAction || !id) {
       return;
     }
-    await postCaseAction(id, openAction, note, analystId);
+    if (!kase.allowedActions.includes(openAction)) {
+      throw new ApiError(403, 'FORBIDDEN', 'This action is no longer available.');
+    }
+    await postCaseAction(id, openAction, note, analystId, identitySignal);
+    identitySignal.throwIfAborted();
     setToast(`Case ${kase.reference}: ${ACTION_LABELS[openAction]} succeeded`);
     setOpenAction(null);
     caseResult.reload();
@@ -101,8 +104,6 @@ export function CasePage() {
         </div>
       </div>
 
-      <CustomerSection customer={kase.customer} />
-      <SignalsSection kase={kase} />
       {riskResult.data ? (
         <RiskPanel explanation={riskResult.data} />
       ) : riskResult.error ? (
@@ -110,11 +111,16 @@ export function CasePage() {
       ) : (
         <Loading />
       )}
+      <CustomerSection customer={kase.customer} />
 
       <section className={styles.section}>
         <h2>Actions</h2>
         {kase.allowedActions.length === 0 ? (
-          <p className={styles.closed}>Case closed — no further actions available.</p>
+          <p className={styles.closed}>
+            {kase.status === 'approved' || kase.status === 'rejected'
+              ? 'Case closed — no further actions available.'
+              : 'Your role has no permitted actions for this case.'}
+          </p>
         ) : (
           <div className={styles.actions}>
             {kase.allowedActions.map((action) => (
@@ -136,8 +142,9 @@ export function CasePage() {
       {openAction ? (
         <ActionDialog
           action={openAction}
-          riskLevel={kase.riskLevel}
-          caseReference={kase.reference}
+          approvalNoteRequired={kase.approvalNoteRequired}
+          signal={identitySignal}
+          subjectLabel={`case ${kase.reference}`}
           onClose={() => setOpenAction(null)}
           onSubmit={handleSubmitAction}
         />
@@ -191,146 +198,110 @@ function CustomerSection({ customer }: { customer: Customer }) {
   );
 }
 
-function SignalsSection({ kase }: { kase: CaseDetail }) {
-  return (
-    <section className={styles.section}>
-      <h2>Risk signals</h2>
-      {kase.signals.length === 0 ? (
-        <p className={styles.closed}>No risk signals.</p>
-      ) : (
-        <div>
-          {kase.signals.map((s) => (
-            <div key={s.id} className={styles.signal}>
-              <Badge kind="severity" value={s.severity} />
-              <div className={styles.signalBody}>
-                <div className={styles.signalTitle}>{s.title}</div>
-                <div className={styles.signalDesc}>{s.description}</div>
-              </div>
-              <div className={styles.signalWeight}>+{s.weight}</div>
-            </div>
-          ))}
-        </div>
-      )}
-    </section>
-  );
-}
-
-function RiskPanel({ explanation }: { explanation: RiskExplanation }) {
+export function RiskPanel({ explanation }: { explanation: RiskExplanation }) {
   const factors = useMemo(
     () => [...explanation.factors].sort((a, b) => b.weight - a.weight),
     [explanation.factors],
   );
-  const title =
-    explanation.riskLevel === 'high' ? 'Why is this case high risk?' : 'Risk assessment';
+  const primaryDriver = explanation.primaryDriver ?? factors[0] ?? null;
+  const title = explanation.riskLevel === 'high'
+    ? 'Why is this case high risk?'
+    : explanation.riskLevel === 'medium'
+      ? 'Why does this case need review?'
+      : 'How was this risk score calculated?';
+
   return (
-    <section className={styles.section}>
-      <h2>{title}</h2>
-      <p>{explanation.summary}</p>
-      <div className={styles.meterWrap}>
-        <div className={styles.meter}>
-          <div
-            className={`${styles.meterFill} ${styles[explanation.riskLevel] ?? ''}`}
-            style={{ width: `${Math.min(100, Math.max(0, explanation.riskScore))}%` }}
-          />
-          <div
-            className={styles.marker}
-            style={{ left: `${explanation.thresholds.medium}%` }}
-          />
-          <div className={styles.marker} style={{ left: `${explanation.thresholds.high}%` }} />
-          <div
-            className={styles.markerLabel}
-            style={{ left: `${explanation.thresholds.medium}%` }}
-          >
-            medium ≥{explanation.thresholds.medium}
+    <section className={`${styles.riskExplanation} ${styles[explanation.riskLevel] ?? ''}`}>
+      <div className={styles.riskHeading}>
+        <div>
+          <div className={styles.eyebrow}>Risk explanation</div>
+          <h2>{title}</h2>
+        </div>
+        <span className={styles.deterministic}>Structured evidence</span>
+      </div>
+
+      <div className={styles.riskOverview}>
+        <div className={styles.scorePanel}>
+          <span className={styles.scoreLabel}>Risk score</span>
+          <div>
+            <strong className={styles.score}>{explanation.riskScore}</strong>
+            <span className={styles.scoreMax}>/100</span>
           </div>
-          <div
-            className={styles.markerLabel}
-            style={{ left: `${explanation.thresholds.high}%` }}
-          >
-            high ≥{explanation.thresholds.high}
+          <div className={styles.riskLevelBadge}>
+            <Badge kind="risk" value={explanation.riskLevel} />
           </div>
+          <div className={styles.scoreTrack} aria-hidden="true">
+            <span
+              className={styles.scoreFill}
+              style={{ width: `${Math.min(100, Math.max(0, explanation.riskScore))}%` }}
+            />
+          </div>
+          <span className={styles.threshold}>
+            High risk starts at {explanation.thresholds.high}
+          </span>
+        </div>
+
+        <div className={styles.factorPanel}>
+          <h3>
+            {factors.length} contributing {factors.length === 1 ? 'factor' : 'factors'}
+          </h3>
+          {factors.length === 0 ? (
+            <p className={styles.noFactors}>No structured risk signals were recorded.</p>
+          ) : (
+            <ol className={styles.factorList}>
+              {factors.map((factor) => (
+                <li key={factor.signalId} className={styles.factorRow}>
+                  <span
+                    className={`${styles.severityDot} ${styles[`severity_${factor.severity}`] ?? ''}`}
+                    aria-label={`${factor.severity} severity`}
+                  />
+                  <span className={styles.factorTitle}>{factor.title}</span>
+                  <strong className={styles.factorWeight}>+{factor.weight}</strong>
+                </li>
+              ))}
+            </ol>
+          )}
         </div>
       </div>
-      <table>
-        <thead>
-          <tr>
-            <th>Severity</th>
-            <th>Factor</th>
-            <th>Description</th>
-            <th>Weight</th>
-            <th>Contribution</th>
-          </tr>
-        </thead>
-        <tbody>
-          {factors.map((f) => (
-            <tr key={f.code}>
-              <td>
-                <Badge kind="severity" value={f.severity} />
-              </td>
-              <td>{f.title}</td>
-              <td>{f.description}</td>
-              <td>+{f.weight}</td>
-              <td>
-                <span
-                  className={styles.factorBar}
-                  style={{ width: `${Math.max(2, f.contributionPct)}px` }}
-                />{' '}
-                {f.contributionPct}%
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </section>
-  );
-}
 
-function AuditTimeline({ events }: { events: AuditEvent[] }) {
-  const [verification, setVerification] = useState<ChainVerification | null>(null);
-  const sorted = useMemo(() => [...events].sort((a, b) => b.sequence - a.sequence), [events]);
+      {primaryDriver ? (
+        <div className={styles.primaryDriver}>
+          <span>Primary driver</span>
+          <strong>{primaryDriver.title}</strong>
+          <span>+{primaryDriver.weight} points</span>
+        </div>
+      ) : null}
 
-  useEffect(() => {
-    let cancelled = false;
-    verifyChain(events).then((result) => {
-      if (!cancelled) {
-        setVerification(result);
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [events]);
+      <p>{explanation.summary}</p>
 
-  return (
-    <section className={styles.section}>
-      <h2>Audit trail</h2>
-      <div className={styles.chain}>
-        {verification === null ? (
-          <span>Verifying…</span>
-        ) : verification.ok ? (
-          <span className={styles.chainOk}>✓ Chain verified ({events.length} events)</span>
-        ) : (
-          <span className={styles.chainBad}>✗ Chain broken at #{verification.brokenAtSequence}</span>
-        )}
-      </div>
-      <div>
-        {sorted.map((e) => (
-          <div key={e.id} className={styles.event}>
-            <div className={styles.eventHead}>
-              <span className={styles.eventActor}>{e.actorName}</span>
-              <span>{humanize(e.action)}</span>
-              <Badge kind="status" value={e.fromStatus ?? '—'} />
-              <span>→</span>
-              <Badge kind="status" value={e.toStatus ?? '—'} />
-              <span className={styles.eventTime}>{formatDateTime(e.createdAt)}</span>
-            </div>
-            {e.note ? <div className={styles.eventNote}>{e.note}</div> : null}
-            <div className={styles.eventHash}>
-              hash <span className="mono" title={e.hash}>{e.hash.slice(0, 12)}…</span>
-            </div>
+      {factors.length > 0 ? (
+        <details className={styles.evidence}>
+          <summary>View supporting evidence</summary>
+          <p className={styles.evidenceIntro}>
+            These recorded signals are the structured evidence used to explain the score.
+          </p>
+          <div className={styles.evidenceList}>
+            {factors.map((factor) => (
+              <article key={factor.signalId} className={styles.evidenceItem}>
+                <div className={styles.evidenceHead}>
+                  <Badge kind="severity" value={factor.severity} />
+                  <strong>{factor.title}</strong>
+                  <span>+{factor.weight} points · {factor.contributionPct}% of raw score</span>
+                </div>
+                <p>{factor.description}</p>
+                <code>Evidence record {factor.signalId}</code>
+              </article>
+            ))}
           </div>
-        ))}
-      </div>
+        </details>
+      ) : null}
+
+      <p className={styles.explanationFootnote}>
+        Deterministic result from recorded risk signals
+        {explanation.scoreCapped
+          ? ` · Raw signal total ${explanation.rawScore}, capped at 100`
+          : ` · Signal total ${explanation.rawScore}`}
+      </p>
     </section>
   );
 }

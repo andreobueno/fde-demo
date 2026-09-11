@@ -68,6 +68,51 @@ export interface AuditEvent {
   hash: string;
 }
 
+export type RefundStatus = 'pending' | 'approved' | 'rejected';
+export type RefundAction = 'approve' | 'reject';
+export type RefundAuditEvent = Omit<AuditEvent, 'caseId'> & { refundId: string };
+
+export interface Refund {
+  id: string;
+  reference: string;
+  customerId: string;
+  customer: Pick<Customer, 'id' | 'fullName' | 'email'>;
+  amountCents: number;
+  currency: 'USD';
+  status: RefundStatus;
+  riskLevel: RiskLevel;
+  reason: string;
+  originalTransaction: {
+    reference: string;
+    amountCents: number;
+    occurredAt: string;
+  };
+  riskIndicators: Array<{
+    code: string;
+    title: string;
+    description: string;
+    severity: RiskLevel;
+  }>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RefundDetail extends Refund {
+  allowedActions: RefundAction[];
+  approvalNoteRequired: true;
+  audit: RefundAuditEvent[];
+}
+
+export interface RiskFactor {
+  signalId: string;
+  code: string;
+  title: string;
+  description: string;
+  severity: SignalSeverity;
+  weight: number;
+  contributionPct: number;
+}
+
 export type PolicyRuleCode =
   | 'HIGH_RISK_JURISDICTION'
   | 'SANCTIONS_HIT'
@@ -122,14 +167,10 @@ export interface RiskExplanation {
   caseId: string;
   riskScore: number;
   riskLevel: RiskLevel;
+  rawScore: number;
+  scoreCapped: boolean;
+  primaryDriver: RiskFactor | null;
   summary: string;
   thresholds: { medium: number; high: number };
-  factors: Array<{
-    code: string;
-    title: string;
-    description: string;
-    severity: SignalSeverity;
-    weight: number;
-    contributionPct: number;
-  }>;
+  factors: RiskFactor[];
 }

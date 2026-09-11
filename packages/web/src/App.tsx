@@ -1,12 +1,18 @@
-import { BrowserRouter, Link, Outlet, Route, Routes } from 'react-router-dom';
+import { BrowserRouter, NavLink, Outlet, Route, Routes, useLocation } from 'react-router-dom';
 import { AnalystProvider, useAnalyst } from './analyst/AnalystContext';
+import { AnalystSelector } from './analyst/AnalystSelector';
+import { ManualIdentityForm } from './analyst/ManualIdentityForm';
 import { CasePage } from './pages/CasePage';
 import { NotFoundPage } from './pages/NotFoundPage';
-import { PolicyPage } from './pages/PolicyPage';
+import { RiskPolicyPage } from './pages/RiskPolicyPage';
 import { QueuePage } from './pages/QueuePage';
+import { PolicyPage } from './pages/PolicyPage';
+import { RefundQueuePage } from './pages/RefundQueuePage';
+import { RefundPage } from './pages/RefundPage';
 
 function Layout() {
-  const { analystId, setAnalystId, analysts } = useAnalyst();
+  const { analystId, setAnalystId, analysts, identitySignal } = useAnalyst();
+  const { pathname } = useLocation();
   return (
     <div>
       <header
@@ -17,29 +23,35 @@ function Layout() {
           padding: '10px 24px',
           background: 'var(--color-surface)',
           borderBottom: '1px solid var(--color-border)',
+          flexWrap: 'wrap',
+          gap: '12px',
         }}
       >
-        <nav style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
-          <Link to="/" style={{ fontWeight: 700, color: 'var(--color-text)' }}>
-            KYC Review Console
-          </Link>
-          <Link to="/">Queue</Link>
-          <Link to="/policy">Risk policy</Link>
+        <nav aria-label="Internal tools" style={{ display: 'flex', gap: '20px', alignItems: 'center' }}>
+          <strong>Operations</strong>
+          <NavLink to="/" end>KYC</NavLink>
+          <NavLink to="/refunds">Refunds</NavLink>
+          <NavLink to="/policy">KYC policy</NavLink>
         </nav>
-        <label style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-          Analyst
-          <select value={analystId} onChange={(e) => setAnalystId(e.target.value)}>
-            {analysts.length === 0 ? <option value={analystId}>{analystId}</option> : null}
-            {analysts.map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.name} ({a.role})
-              </option>
-            ))}
-          </select>
-        </label>
+        <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+          <AnalystSelector analystId={analystId} analysts={analysts} onChange={setAnalystId} />
+          <ManualIdentityForm key={analystId} identitySignal={identitySignal} onSelect={setAnalystId} />
+        </div>
       </header>
-      <Outlet />
+      <Outlet key={`${analystId}:${pathname}`} />
     </div>
+  );
+}
+
+function PolicyLayout() {
+  return (
+    <>
+      <nav aria-label="KYC policy sections" style={{ display: 'flex', gap: 20, padding: '16px 24px' }}>
+        <NavLink to="/policy" end>Approval notes</NavLink>
+        <NavLink to="/policy/risk">Risk scoring</NavLink>
+      </nav>
+      <Outlet />
+    </>
   );
 }
 
@@ -51,7 +63,12 @@ export function App() {
           <Route element={<Layout />}>
             <Route path="/" element={<QueuePage />} />
             <Route path="/cases/:id" element={<CasePage />} />
-            <Route path="/policy" element={<PolicyPage />} />
+            <Route path="/refunds" element={<RefundQueuePage />} />
+            <Route path="/refunds/:id" element={<RefundPage />} />
+            <Route path="/policy" element={<PolicyLayout />}>
+              <Route index element={<PolicyPage />} />
+              <Route path="risk" element={<RiskPolicyPage />} />
+            </Route>
             <Route path="*" element={<NotFoundPage />} />
           </Route>
         </Routes>

@@ -1,316 +1,185 @@
-import { useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ApiError, getPolicy, getPolicyHistory, putPolicy } from '../api/client';
+import { ApiError, getMe, getPolicy, getPolicyAudit, updatePolicy } from '../api/client';
+import type { Policy, PolicyAuditEvent } from '../api/types';
 import { useApi } from '../api/useApi';
 import { useAnalyst } from '../analyst/AnalystContext';
-import type { RiskPolicy, RiskPolicyChange, RiskPolicyPatch } from '../api/types';
 import { ErrorState } from '../components/ErrorState';
 import { Loading } from '../components/Loading';
 import { Toast } from '../components/Toast';
-import { formatDateTime } from '../lib/format';
-import { buildPolicyPatch, type PolicyDraft, validatePolicyDraft } from '../lib/policyDraft';
-import styles from './PolicyPage.module.css';
-
-export const POLICY_EDITOR_ROLE = 'compliance_manager';
-
-function draftFromPolicy(policy: RiskPolicy): PolicyDraft {
-  return {
-    weights: Object.fromEntries(policy.rules.map((r) => [r.code, String(r.weight)])),
-    thresholds: {
-      medium: String(policy.thresholds.medium),
-      high: String(policy.thresholds.high),
-    },
-  };
-}
+import { validateNote } from '../lib/actionRules';
+import { formatDateTime, humanize } from '../lib/format';
+import styles from '../components/Detail.module.css';
 
 export function PolicyPage() {
-  const { analystId, analysts } = useAnalyst();
-  const me = analysts.find((a) => a.id === analystId);
-  const canEdit = me?.role === POLICY_EDITOR_ROLE;
-
+  const { analystId } = useAnalyst();
   const policyResult = useApi((signal) => getPolicy(analystId, signal), [analystId]);
-  const historyResult = useApi((signal) => getPolicyHistory(analystId, signal), [analystId]);
-
-  const [draft, setDraft] = useState<PolicyDraft | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
+  const auditResult = useApi((signal) => getPolicyAudit(analystId, signal), [analystId]);
+  const meResult = useApi((signal) => getMe(analystId, signal), [analystId]);
   const [toast, setToast] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (policyResult.data) {
-      setDraft(draftFromPolicy(policyResult.data));
-      setSaveError(null);
-    }
-  }, [policyResult.data]);
-
-  const policy = policyResult.data;
-  const patch = useMemo<RiskPolicyPatch | null>(
-    () => (policy && draft ? buildPolicyPatch(policy, draft) : null),
-    [policy, draft],
-  );
-  const validationError = draft ? validatePolicyDraft(draft) : null;
-  const dirty = patch !== null && Object.keys(patch).length > 0;
-
-  if (policyResult.error) {
-    return (
-      <div className={styles.page}>
-        <ErrorState error={policyResult.error} onRetry={policyResult.reload} />
-      </div>
-    );
-  }
-  if (!policy || !draft) {
-    return (
-      <div className={styles.page}>
-        <Loading />
-      </div>
-    );
-  }
-
-  const setWeight = (code: string, value: string) =>
-    setDraft((d) => (d ? { ...d, weights: { ...d.weights, [code]: value } } : d));
-  const setThreshold = (level: 'medium' | 'high', value: string) =>
-    setDraft((d) => (d ? { ...d, thresholds: { ...d.thresholds, [level]: value } } : d));
-
-  const reset = () => {
-    setDraft(draftFromPolicy(policy));
-    setSaveError(null);
+  const reload = () => {
+    policyResult.reload();
+    auditResult.reload();
+    meResult.reload();
   };
-
-  const restoreDefaults = () =>
-    setDraft({
-      weights: Object.fromEntries(policy.rules.map((r) => [r.code, String(r.defaultWeight)])),
-      thresholds: {
-        medium: String(policy.defaultThresholds.medium),
-        high: String(policy.defaultThresholds.high),
-      },
-    });
-
-  const save = async () => {
-    if (!patch || !dirty || validationError) return;
-    setSaving(true);
-    setSaveError(null);
-    try {
-      const result = await putPolicy(patch, analystId);
-      const n = result.change?.recomputedCases ?? 0;
-      setToast(
-        result.change
-          ? `Policy v${result.change.version} saved — ${n} open case${n === 1 ? '' : 's'} re-scored.`
-          : 'No changes to save.',
-      );
-      policyResult.reload();
-      historyResult.reload();
-    } catch (err) {
-      setSaveError(err instanceof ApiError ? err.message : 'Unexpected error');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const pct = (raw: string) => {
-    const n = Number(raw);
-    return `${Number.isFinite(n) ? Math.min(Math.max(n, 0), 100) : 0}%`;
-  };
-  const mediumPct = pct(draft.thresholds.medium);
-  const highPct = pct(draft.thresholds.high);
-  const scaleStyle = { '--medium': mediumPct, '--high': highPct } as CSSProperties;
 
   return (
     <div className={styles.page}>
-      <Link to="/">← Back to queue</Link>
-      <div className={styles.header} style={{ marginTop: 12 }}>
-        <h1>Risk policy</h1>
-        <span className={styles.code}>v{policy.version}</span>
-      </div>
-      <p className={styles.meta}>
-        {policy.updatedAt
-          ? `Last changed ${formatDateTime(policy.updatedAt)} by ${policy.updatedBy ?? 'unknown'}.`
-          : 'Using default policy — no changes recorded yet.'}{' '}
-        Scores are the sum of triggered rule weights (0–100). Saving re-scores all open cases;
-        closed cases keep the score they were decided under.
-      </p>
-
-      {!canEdit ? (
-        <div className={styles.notice} role="status">
-          Read-only: only a Compliance Manager can change the risk policy.
-          {me ? ` You are signed in as ${me.name} (${me.role.replace('_', ' ')}).` : ''}
-        </div>
-      ) : null}
-
+      <Link to="/" className={styles.back}>← Back to queue</Link>
+      <div className={styles.header}><h1>Approval-note policy</h1></div>
       <section className={styles.section}>
-        <h2>Rule weights</h2>
-        <table className={styles.table}>
-          <thead>
-            <tr>
-              <th>Rule</th>
-              <th>Code</th>
-              <th className={styles.weightCell}>Weight</th>
-            </tr>
-          </thead>
-          <tbody>
-            {policy.rules.map((rule) => {
-              const value = draft.weights[rule.code] ?? '';
-              const changed = Number(value) !== rule.weight;
-              return (
-                <tr key={rule.code}>
-                  <td>
-                    <div className={styles.ruleTitle}>{rule.title}</div>
-                    <div className={styles.ruleDesc}>{rule.description}</div>
-                  </td>
-                  <td className={styles.code}>{rule.code}</td>
-                  <td className={styles.weightCell}>
-                    <input
-                        type="number"
-                        min={0}
-                        max={100}
-                        step={1}
-                        inputMode="numeric"
-                        className={`${styles.weightInput} ${changed ? styles.dirty : ''}`}
-                        value={value}
-                        disabled={!canEdit || saving}
-                        onChange={(e) => setWeight(rule.code, e.target.value)}
-                        aria-label={`${rule.title} weight`}
-                      />
-                    {rule.weight !== rule.defaultWeight ? (
-                      <span className={styles.defaultHint}>default {rule.defaultWeight}</span>
-                    ) : null}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+        <h2>Approval justification</h2>
+        <p>High-risk approvals always require a note of 10–1000 characters.</p>
+        {policyResult.error ? (
+          <ErrorState error={policyResult.error} onRetry={policyResult.reload} />
+        ) : policyResult.loading || !policyResult.data ? (
+          <Loading />
+        ) : (
+          <>
+            <dl className={styles.defList}>
+              <dt>Low / medium risk note</dt>
+              <dd>{policyResult.data.requireApprovalNote ? 'Required (10–1000 characters)' : 'Optional (up to 1000 characters)'}</dd>
+              <dt>Version</dt><dd>{policyResult.data.version}</dd>
+              <dt>Updated</dt><dd>{formatDateTime(policyResult.data.updatedAt)}</dd>
+              <dt>Updated by</dt><dd>{policyResult.data.updatedBy ?? 'Initial policy'}</dd>
+            </dl>
+            {meResult.error ? (
+              <ErrorState error={meResult.error} onRetry={meResult.reload} />
+            ) : meResult.loading || !meResult.data ? (
+              <Loading />
+            ) : meResult.data.role === 'compliance_manager' ? (
+              <PolicyForm
+                key={policyResult.data.version}
+                policy={policyResult.data}
+                onReload={reload}
+                onSaved={() => {
+                  setToast('Policy updated');
+                  reload();
+                }}
+              />
+            ) : (
+              <p className={styles.closed}>Only compliance managers can edit policy.</p>
+            )}
+          </>
+        )}
       </section>
-
       <section className={styles.section}>
-        <h2>Risk level thresholds</h2>
-        <div className={styles.scale} style={scaleStyle} aria-hidden="true">
-          <div className={styles.scaleMarker} style={{ left: mediumPct }} />
-          <div className={styles.scaleLabel} style={{ left: mediumPct }}>
-            medium ≥ {draft.thresholds.medium || '?'}
-          </div>
-          <div className={styles.scaleMarker} style={{ left: highPct }} />
-          <div className={styles.scaleLabel} style={{ left: highPct }}>
-            high ≥ {draft.thresholds.high || '?'}
-          </div>
-        </div>
-        <div className={styles.thresholds}>
-          {(['medium', 'high'] as const).map((level) => (
-            <div key={level} className={styles.thresholdCard}>
-              <label>
-                <div className={styles.thresholdLabel}>
-                  {level === 'medium' ? 'Medium' : 'High'} risk from score
-                </div>
-                <input
-                  type="number"
-                  min={1}
-                  max={100}
-                  step={1}
-                  inputMode="numeric"
-                  className={`${styles.weightInput} ${
-                    Number(draft.thresholds[level]) !== policy.thresholds[level] ? styles.dirty : ''
-                  }`}
-                  value={draft.thresholds[level]}
-                  disabled={!canEdit || saving}
-                  onChange={(e) => setThreshold(level, e.target.value)}
-                />
-              </label>
-              <div className={styles.thresholdHelp}>
-                {level === 'medium'
-                  ? 'Scores below this are low risk.'
-                  : 'Approving a high-risk case requires a note.'}{' '}
-                Default {policy.defaultThresholds[level]}.
-              </div>
-            </div>
-          ))}
-        </div>
+        <h2>Policy history</h2>
+        {auditResult.error ? (
+          <ErrorState error={auditResult.error} onRetry={auditResult.reload} />
+        ) : auditResult.loading || !auditResult.data ? (
+          <Loading />
+        ) : (
+          <PolicyHistory events={auditResult.data} />
+        )}
       </section>
-
-      {canEdit ? (
-        <section className={styles.section}>
-          <div className={styles.footer}>
-            <button
-              type="button"
-              className="primary"
-              disabled={!dirty || saving || validationError !== null}
-              onClick={() => void save()}
-            >
-              {saving ? 'Saving…' : 'Save policy'}
-            </button>
-            <button type="button" disabled={!dirty || saving} onClick={reset}>
-              Discard changes
-            </button>
-            <button type="button" disabled={saving} onClick={restoreDefaults}>
-              Restore defaults
-            </button>
-            {validationError ? (
-              <span className={styles.error} role="alert">
-                {validationError}
-              </span>
-            ) : saveError ? (
-              <span className={styles.error} role="alert">
-                {saveError}
-              </span>
-            ) : dirty ? (
-              <span className={styles.meta} style={{ margin: 0 }}>
-                {Object.keys(patch?.weights ?? {}).length +
-                  Object.keys(patch?.thresholds ?? {}).length}{' '}
-                unsaved change(s)
-              </span>
-            ) : null}
-          </div>
-        </section>
-      ) : null}
-
-      <HistorySection
-        history={historyResult.data}
-        error={historyResult.error}
-        onRetry={historyResult.reload}
-      />
-
       {toast ? <Toast message={toast} onDismiss={() => setToast(null)} /> : null}
     </div>
   );
 }
 
-function HistorySection({
-  history,
-  error,
-  onRetry,
+function PolicyForm({
+  policy,
+  onSaved,
+  onReload,
 }: {
-  history: RiskPolicyChange[] | null;
-  error: ApiError | null;
-  onRetry: () => void;
+  policy: Policy;
+  onSaved: () => void;
+  onReload: () => void;
 }) {
+  const { analystId, identitySignal } = useAnalyst();
+  const [requireApprovalNote, setRequireApprovalNote] = useState(policy.requireApprovalNote);
+  const [reason, setReason] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [needsReload, setNeedsReload] = useState(false);
+
+  const submit = async () => {
+    if (identitySignal.aborted || submitting || needsReload) {
+      return;
+    }
+    const validation = validateNote(reason, true, 'Reason');
+    if (validation) {
+      setError(validation);
+      return;
+    }
+    setSubmitting(true);
+    setError(null);
+    try {
+      await updatePolicy({ version: policy.version, requireApprovalNote, reason }, analystId, identitySignal);
+      identitySignal.throwIfAborted();
+      onSaved();
+    } catch (err) {
+      if (identitySignal.aborted) {
+        return;
+      }
+      if (err instanceof ApiError) {
+        setNeedsReload(err.status === 409 || err.status === 403);
+        setError(err.status === 409
+          ? 'The policy changed while you were editing. Reload the latest policy before trying again.'
+          : err.message);
+      } else {
+        setError('Unexpected error. Please try again.');
+      }
+      setSubmitting(false);
+    }
+  };
+
   return (
-    <section className={styles.section}>
-      <h2>Change history</h2>
-      {error ? (
-        <ErrorState error={error} onRetry={onRetry} />
-      ) : !history ? (
-        <Loading />
-      ) : history.length === 0 ? (
-        <p className={styles.empty}>No policy changes yet.</p>
-      ) : (
-        history.map((c) => (
-          <div key={c.id} className={styles.historyItem}>
-            <div className={styles.historyHead}>
-              <span className={styles.historyVersion}>v{c.version}</span>
-              <span>{c.actorName}</span>
-              <span className={styles.historyTime}>{formatDateTime(c.createdAt)}</span>
-              <span className={styles.historyTime}>
-                · {c.recomputedCases} open case{c.recomputedCases === 1 ? '' : 's'} re-scored
-              </span>
-            </div>
-            <ul className={styles.historyChanges}>
-              {c.changes.map((ch) => (
-                <li key={ch.key}>
-                  <span className={styles.code}>{ch.key}</span>: {ch.from} → {ch.to}
-                </li>
-              ))}
-            </ul>
+    <form onSubmit={(event) => { event.preventDefault(); void submit(); }} style={{ marginTop: 16 }}>
+      <fieldset disabled={submitting || needsReload} style={{ border: 0, padding: 0, margin: 0 }}>
+        <legend>Edit policy</legend>
+        <p>
+          <label>
+            <input type="checkbox" checked={requireApprovalNote} onChange={(event) => setRequireApprovalNote(event.target.checked)} />
+            {' '}Require approval notes for low / medium risk cases
+          </label>
+        </p>
+        <label htmlFor="policy-reason">Reason (required, 10–1000 characters)</label>
+        <textarea
+          id="policy-reason"
+          rows={4}
+          value={reason}
+          onChange={(event) => setReason(event.target.value)}
+          style={{ display: 'block', width: '100%', margin: '6px 0 12px' }}
+        />
+        <button type="submit" className="primary">{submitting ? 'Saving…' : 'Save policy'}</button>
+      </fieldset>
+      {error ? <p className={styles.bad} role="alert">{error}</p> : null}
+      {needsReload ? <button type="button" onClick={onReload}>Reload policy and discard edits</button> : null}
+    </form>
+  );
+}
+
+function PolicyHistory({ events }: { events: PolicyAuditEvent[] }) {
+  if (events.length === 0) {
+    return <p className={styles.closed}>No policy changes recorded.</p>;
+  }
+  return (
+    <div>
+      {[...events].sort((a, b) => b.newState.version - a.newState.version).map((event) => (
+        <div key={event.id} className={styles.event}>
+          <div className={styles.eventHead}>
+            <span className={styles.eventActor}>{event.actorName} ({humanize(event.actorRole)})</span>
+            <span>{humanize(event.action)}</span>
+            <span className={styles.eventTime}>{formatDateTime(event.createdAt)}</span>
           </div>
-        ))
-      )}
-    </section>
+          <p>
+            Version {event.previousState.version} → {event.newState.version}
+            {' · '}Low / medium risk approval note: {event.previousState.requireApprovalNote ? 'Required' : 'Optional'}
+            {' → '}{event.newState.requireApprovalNote ? 'Required' : 'Optional'}
+          </p>
+          <div className={styles.eventNote}>{event.reason}</div>
+          <details className={styles.eventHash}>
+            <summary>Audit details</summary>
+            <p>Actor ID: {event.actorId}</p>
+            <p>Event ID: {event.id}</p>
+            <p style={{ overflowWrap: 'anywhere' }}>Previous hash: <span className="mono">{event.prevHash}</span></p>
+            <p style={{ overflowWrap: 'anywhere' }}>Hash: <span className="mono">{event.hash}</span></p>
+          </details>
+        </div>
+      ))}
+    </div>
   );
 }

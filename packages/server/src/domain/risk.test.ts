@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { computeRisk, explainRisk } from './risk.js';
-import { DEFAULT_RISK_POLICY } from './policy.js';
-import type { Customer } from '../types.js';
+import type { Customer, RiskSignal } from '../types.js';
+import { DEFAULT_RISK_POLICY } from './riskPolicy.js';
 
 const NOW = new Date('2026-06-01T00:00:00Z');
 
@@ -24,6 +24,19 @@ function baseCustomer(overrides: Partial<Customer> = {}): Customer {
     pepFlag: false,
     sanctionsHit: false,
     adverseMediaHits: 0,
+    ...overrides,
+  };
+}
+
+function recordedSignal(overrides: Partial<RiskSignal> = {}): RiskSignal {
+  return {
+    id: 'signal-pep',
+    caseId: 'case-x',
+    code: 'PEP',
+    title: 'Politically exposed person',
+    description: 'PEP flag recorded during the original review.',
+    severity: 'high',
+    weight: 35,
     ...overrides,
   };
 }
@@ -64,6 +77,8 @@ describe('computeRisk', () => {
   });
 
   it.each([
+    ['HIGH_RISK_JURISDICTION', { countryOfResidence: 'IR' }, 25],
+    ['ADVERSE_MEDIA', { adverseMediaHits: 4 }, 30],
     ['SANCTIONS_HIT', { sanctionsHit: true }, 40],
     ['PEP', { pepFlag: true }, 30],
     ['DOCUMENT_EXPIRING', { idDocumentExpiresAt: '2026-06-15T00:00:00Z' }, 10],
@@ -71,6 +86,8 @@ describe('computeRisk', () => {
     ['ID_DOC_UNVERIFIED', { idDocumentVerified: false }, 20],
     ['ADDRESS_UNVERIFIED', { addressVerified: false }, 10],
     ['HIGH_EXPECTED_VOLUME', { expectedMonthlyVolumeUsd: 50_001 }, 15],
+    ['OPAQUE_SOURCE_OF_FUNDS', { sourceOfFunds: 'crypto' }, 15],
+    ['NEW_ACCOUNT', { accountOpenedAt: '2026-05-20T00:00:00Z' }, 5],
     ['CASH_INTENSIVE_OCCUPATION', { occupation: 'car_dealer' }, 10],
   ] as const)('signal %s fires with weight %d', (code, overrides, weight) => {
     const r = computeRisk(baseCustomer(overrides as Partial<Customer>), NOW);
@@ -170,29 +187,57 @@ describe('computeRisk', () => {
 });
 
 describe('explainRisk', () => {
+  const kase = { id: 'case-x', riskScore: 55, riskLevel: 'medium' } as const;
+  const signals = [
+    recordedSignal(),
+    recordedSignal({
+      id: 'signal-id',
+      code: 'ID_DOC_UNVERIFIED',
+      title: 'ID document unverified',
+      description: 'Identity document was unverified at the time of review.',
+      severity: 'medium',
+      weight: 20,
+    }),
+  ];
+
   it('returns factors with contributionPct summing ~100 and a summary', () => {
-    const e = explainRisk('case-x', baseCustomer({ pepFlag: true, idDocumentVerified: false }), NOW);
+    const e = explainRisk(kase, signals);
     expect(e.caseId).toBe('case-x');
-    expect(e.riskScore).toBe(50);
+    expect(e.riskScore).toBe(55);
     expect(e.riskLevel).toBe('medium');
+    expect(e.rawScore).toBe(55);
+    expect(e.scoreCapped).toBe(false);
     expect(e.thresholds).toEqual({ medium: 30, high: 60 });
-    expect(e.summary).toContain('50');
-    expect(e.factors.map((f) => f.contributionPct)).toEqual([60, 40]);
+    expect(e.summary).toContain('55');
+    expect(e.summary).toContain('primary driver: Politically exposed person');
+    expect(e.summary).not.toContain('does not match');
+    expect(e.factors).toEqual(signals.map((s, index) => ({
+      signalId: s.id,
+      code: s.code,
+      title: s.title,
+      description: s.description,
+      severity: s.severity,
+      weight: s.weight,
+      contributionPct: [64, 36][index],
+    })));
+    expect(e.primaryDriver).toEqual(e.factors[0]);
   });
 
   it('contributionPct sums to 100 even when the score is clamped', () => {
-    const e = explainRisk(
-      'case-z',
+    const evaluation = computeRisk(
       baseCustomer({ sanctionsHit: true, pepFlag: true, idDocumentVerified: false, addressVerified: false }),
       NOW,
+    );
+    const e = explainRisk(
+      { id: 'case-z', riskScore: evaluation.score, riskLevel: evaluation.level },
+      evaluation.signals.map((signal, index) => ({ ...signal, id: `signal-${index}`, caseId: 'case-z' })),
     );
     expect(e.riskScore).toBe(100);
     expect(e.factors.reduce((sum, f) => sum + f.contributionPct, 0)).toBe(100);
   });
 
   it('contributionPct sums to exactly 100 for equal weights with repeating fractions', () => {
-    const e = explainRisk(
-      'case-w',
+    const evaluation = computeRisk(
       baseCustomer({
         idDocumentExpiresAt: '2026-06-15T00:00:00Z',
         addressVerified: false,
@@ -200,8 +245,14 @@ describe('explainRisk', () => {
       }),
       NOW,
     );
+    const recordedCase = { id: 'case-w', riskScore: evaluation.score, riskLevel: evaluation.level };
+    const savedSignals = evaluation.signals.map((signal, index) => ({
+      ...signal, id: `signal-${index}`, caseId: recordedCase.id,
+    }));
+    const e = explainRisk(recordedCase, savedSignals);
     expect(e.factors.map((f) => f.weight)).toEqual([10, 10, 10]);
     expect(e.factors.map((f) => f.contributionPct)).toEqual([34, 33, 33]);
+    expect(explainRisk(recordedCase, [...savedSignals].reverse())).toEqual(e);
   });
 
   it('reports whole elapsed days for expired documents', () => {
@@ -211,9 +262,89 @@ describe('explainRisk', () => {
     );
   });
 
-  it('contributionPct is 0 when score is 0', () => {
-    const e = explainRisk('case-y', baseCustomer(), NOW);
+  it('is deterministic for repeated and reordered input without mutating stored evidence', () => {
+    const input = Object.freeze(signals.map((s) => Object.freeze({ ...s })));
+    const first = explainRisk(kase, input);
+    expect(explainRisk(kase, input)).toEqual(first);
+    expect(explainRisk(kase, [...input].reverse())).toEqual(first);
+    expect(input).toEqual(signals);
+  });
+
+  it('orders by weight, then code and signal ID using stable string comparison for the primary tie', () => {
+    const input = [
+      recordedSignal({ id: 'signal-z', code: 'z' }),
+      recordedSignal({ id: 'signal-a', code: 'Z' }),
+      recordedSignal({ id: 'signal-A', code: 'Z' }),
+      recordedSignal({ id: 'signal-low', code: 'A', weight: 5 }),
+    ];
+    const e = explainRisk({ ...kase, riskScore: 100, riskLevel: 'high' }, input);
+    expect(e.factors.map((f) => f.signalId)).toEqual([
+      'signal-A', 'signal-a', 'signal-z', 'signal-low',
+    ]);
+    expect(e.primaryDriver).toEqual(e.factors[0]);
+    expect(e.primaryDriver?.signalId).toBe('signal-A');
+    expect(explainRisk({ ...kase, riskScore: 100, riskLevel: 'high' }, [...input].reverse())).toEqual(e);
+  });
+
+  it('reports absent evidence without inventing factors for a recorded score', () => {
+    const e = explainRisk(kase, []);
+    expect(e.riskScore).toBe(55);
+    expect(e.riskLevel).toBe('medium');
+    expect(e.rawScore).toBe(0);
+    expect(e.scoreCapped).toBe(false);
+    expect(e.factors).toEqual([]);
+    expect(e.primaryDriver).toBeNull();
+    expect(e.summary).toContain('no risk signals were recorded');
+    expect(e.summary).toContain('recorded score does not match');
+  });
+
+  it('returns a zero-score explanation for empty evidence', () => {
+    const e = explainRisk({ ...kase, riskScore: 0, riskLevel: 'low' }, []);
     expect(e.riskScore).toBe(0);
     expect(e.factors).toHaveLength(0);
+    expect(e.primaryDriver).toBeNull();
+    expect(e.summary).not.toContain('does not match');
+  });
+
+  it('contributionPct is 0 for a recorded factor when the raw total is 0', () => {
+    const e = explainRisk(kase, [recordedSignal({ weight: 0 })]);
+    expect(e.rawScore).toBe(0);
+    expect(e.factors[0]?.contributionPct).toBe(0);
+  });
+
+  it('uses raw weights above 100 as the percentage denominator', () => {
+    const e = explainRisk({ ...kase, riskScore: 100, riskLevel: 'high' }, [
+      ...signals,
+      recordedSignal({
+        id: 'signal-sanctions',
+        code: 'SANCTIONS_HIT',
+        title: 'Sanctions list match',
+        weight: 60,
+      }),
+    ]);
+    expect(e.riskScore).toBe(100);
+    expect(e.rawScore).toBe(115);
+    expect(e.scoreCapped).toBe(true);
+    expect(e.factors.map((f) => f.contributionPct)).toEqual([52, 31, 17]);
+    expect(e.summary).not.toContain('does not match');
+  });
+
+  it('does not mark an exact raw total of 100 as capped', () => {
+    const e = explainRisk({ ...kase, riskScore: 100, riskLevel: 'high' }, [
+      recordedSignal({ weight: 100 }),
+    ]);
+    expect(e.rawScore).toBe(100);
+    expect(e.scoreCapped).toBe(false);
+  });
+
+  it('preserves inconsistent recorded scores and levels while flagging the discrepancy', () => {
+    const e = explainRisk({ ...kase, riskScore: 80, riskLevel: 'low' }, signals);
+    expect(e.riskScore).toBe(80);
+    expect(e.riskLevel).toBe('low');
+    expect(e.rawScore).toBe(55);
+    expect(e.factors.map((f) => f.contributionPct)).toEqual([64, 36]);
+    expect(e.summary).toContain('80 (low risk)');
+    expect(e.summary).toContain('recorded score does not match');
+    expect(e.summary).toContain('recorded risk level does not match');
   });
 });

@@ -1,12 +1,17 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import { openDb, type Db } from '../db.js';
 import { createApp } from './app.js';
 import { computeEventHash, GENESIS_HASH, verifyChain } from '../domain/audit.js';
-import type { CaseStatus } from '../types.js';
+import { computeRisk } from '../domain/risk.js';
+import type { CaseStatus, Customer, KycCase, RiskExplanation, RiskSignal } from '../types.js';
 
 let db: Db;
 let app: ReturnType<typeof createApp>;
+
+function authenticated() {
+  return request.agent(app).set('x-analyst-id', 'ana-003');
+}
 
 function addCase(id: string, opts: {
   status?: CaseStatus; riskLevel?: 'low' | 'medium' | 'high'; riskScore?: number;
@@ -49,12 +54,17 @@ beforeEach(() => {
     'ana-003', 'Grete Lindholm', 'analyst',
   );
   db.prepare('INSERT INTO analysts (id, name, role) VALUES (?, ?, ?)').run(
-    'ana-006', 'Dana Whitcombe', 'compliance_manager',
+    'ana-006', 'Sofia Chen', 'compliance_manager',
   );
   addCase('c-1', { status: 'pending', riskLevel: 'high', riskScore: 70, fullName: 'Alice High', email: 'alice@x.com', reference: 'KYC-0001' });
   addCase('c-2', { status: 'in_review', riskLevel: 'medium', riskScore: 40, fullName: 'Bob Mid', email: 'bob@x.com', reference: 'KYC-0002' });
   addCase('c-3', { status: 'approved', riskLevel: 'low', riskScore: 5, fullName: 'Cara Low', email: 'cara@y.com', reference: 'KYC-0003' });
-  app = createApp(db);
+  app = createApp(db, { trustAnalystHeader: true });
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+  db.close();
 });
 
 describe('HTTP API', () => {
@@ -65,33 +75,33 @@ describe('HTTP API', () => {
   });
 
   it('GET /api/cases filters by status and riskLevel', async () => {
-    const res = await request(app).get('/api/cases?status=pending,in_review&riskLevel=high');
+    const res = await authenticated().get('/api/cases?status=pending,in_review&riskLevel=high');
     expect(res.status).toBe(200);
     expect(res.body.total).toBe(1);
     expect(res.body.items[0].id).toBe('c-1');
   });
 
   it('GET /api/cases q matches reference/name/email case-insensitively', async () => {
-    const byName = await request(app).get('/api/cases?q=alice');
+    const byName = await authenticated().get('/api/cases?q=alice');
     expect(byName.body.total).toBe(1);
-    const byRef = await request(app).get('/api/cases?q=kyc-0002');
+    const byRef = await authenticated().get('/api/cases?q=kyc-0002');
     expect(byRef.body.items[0].id).toBe('c-2');
-    const byEmail = await request(app).get('/api/cases?q=CARA@y.com');
+    const byEmail = await authenticated().get('/api/cases?q=CARA@y.com');
     expect(byEmail.body.total).toBe(1);
   });
 
   it('GET /api/cases paginates and sorts', async () => {
-    const res = await request(app).get('/api/cases?sort=riskScore&order=desc&page=2&pageSize=2');
+    const res = await authenticated().get('/api/cases?sort=riskScore&order=desc&page=2&pageSize=2');
     expect(res.status).toBe(200);
     expect(res.body.total).toBe(3);
     expect(res.body.items).toHaveLength(1);
     expect(res.body.items[0].id).toBe('c-3');
-    const p1 = await request(app).get('/api/cases?sort=riskScore&order=desc&page=1&pageSize=2');
+    const p1 = await authenticated().get('/api/cases?sort=riskScore&order=desc&page=1&pageSize=2');
     expect(p1.body.items.map((i: { id: string }) => i.id)).toEqual(['c-1', 'c-2']);
   });
 
   it('GET /api/cases sorts by reference ascending', async () => {
-    const res = await request(app).get('/api/cases?sort=reference&order=asc');
+    const res = await authenticated().get('/api/cases?sort=reference&order=asc');
     expect(res.status).toBe(200);
     expect(res.body.items.map((i: { reference: string }) => i.reference)).toEqual([
       'KYC-0001', 'KYC-0002', 'KYC-0003',
@@ -99,7 +109,7 @@ describe('HTTP API', () => {
   });
 
   it('GET /api/cases sorts by customer name case-insensitively', async () => {
-    const res = await request(app).get('/api/cases?sort=customer&order=desc');
+    const res = await authenticated().get('/api/cases?sort=customer&order=desc');
     expect(res.status).toBe(200);
     expect(res.body.items.map((i: { id: string }) => i.id)).toEqual(['c-3', 'c-2', 'c-1']);
   });
@@ -107,30 +117,30 @@ describe('HTTP API', () => {
   it('GET /api/cases sorts by assignedTo with unassigned last', async () => {
     db.prepare("UPDATE cases SET assigned_to = 'ana-003' WHERE id = 'c-2'").run();
     db.prepare("UPDATE cases SET assigned_to = 'ana-001' WHERE id = 'c-3'").run();
-    const asc = await request(app).get('/api/cases?sort=assignedTo&order=asc');
+    const asc = await authenticated().get('/api/cases?sort=assignedTo&order=asc');
     expect(asc.status).toBe(200);
     // Grete Lindholm < Marta Ellison, then unassigned
     expect(asc.body.items.map((i: { id: string }) => i.id)).toEqual(['c-2', 'c-3', 'c-1']);
-    const desc = await request(app).get('/api/cases?sort=assignedTo&order=desc');
+    const desc = await authenticated().get('/api/cases?sort=assignedTo&order=desc');
     expect(desc.body.items.map((i: { id: string }) => i.id)).toEqual(['c-3', 'c-2', 'c-1']);
   });
 
   it('GET /api/cases sort=bogus → 400', async () => {
-    const res = await request(app).get('/api/cases?sort=bogus');
+    const res = await authenticated().get('/api/cases?sort=bogus');
     expect(res.status).toBe(400);
     expect(res.body.error.code).toBe('VALIDATION_ERROR');
   });
 
   it('GET /api/cases validates bad params → 400', async () => {
-    const res = await request(app).get('/api/cases?pageSize=101');
+    const res = await authenticated().get('/api/cases?pageSize=101');
     expect(res.status).toBe(400);
     expect(res.body.error.code).toBe('VALIDATION_ERROR');
-    const res2 = await request(app).get('/api/cases?status=bogus');
+    const res2 = await authenticated().get('/api/cases?status=bogus');
     expect(res2.status).toBe(400);
   });
 
   it('GET /api/cases/:id returns detail with customer/signals/audit/allowedActions', async () => {
-    const res = await request(app).get('/api/cases/c-1');
+    const res = await authenticated().get('/api/cases/c-1');
     expect(res.status).toBe(200);
     expect(res.body.customer.email).toBe('alice@x.com');
     expect(res.body.allowedActions).toContain('start_review');
@@ -138,20 +148,90 @@ describe('HTTP API', () => {
   });
 
   it('GET /api/cases/:id unknown → 404 NOT_FOUND', async () => {
-    const res = await request(app).get('/api/cases/nope');
+    const res = await authenticated().get('/api/cases/nope');
     expect(res.status).toBe(404);
     expect(res.body.error.code).toBe('NOT_FOUND');
   });
 
   it('GET /api/cases/:id/risk-explanation returns explanation', async () => {
-    const res = await request(app).get('/api/cases/c-1/risk-explanation');
+    const res = await authenticated().get('/api/cases/c-1/risk-explanation');
     expect(res.status).toBe(200);
     expect(res.body.caseId).toBe('c-1');
     expect(res.body.thresholds).toEqual({ medium: 30, high: 60 });
   });
 
+  it('risk explanation preserves detail scores and evidence across customer and clock drift without writes', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-06-01T00:00:00Z'));
+    db.prepare("UPDATE cases SET risk_score = 65 WHERE id = 'c-1'").run();
+    db.prepare("UPDATE customers SET account_opened_at = '2026-05-20T00:00:00Z' WHERE id = 'c-1-cust'").run();
+    const insertSignal = db.prepare(`INSERT INTO risk_signals
+      (id, case_id, code, title, description, severity, weight) VALUES (?, 'c-1', ?, ?, ?, ?, ?)`);
+    insertSignal.run(
+      'saved-new-account', 'NEW_ACCOUNT', 'New account',
+      'Account opened 3 day(s) ago (< 30 days).', 'low', 5,
+    );
+    insertSignal.run(
+      'saved-sanctions', 'SANCTIONS_HIT', 'Sanctions list match',
+      'Potential sanctions match recorded at initial review.', 'high', 60,
+    );
+    const changesBefore = db.prepare('SELECT total_changes() AS count').get();
+    const detailResponse = await authenticated().get('/api/cases/c-1').expect(200);
+    const detail = detailResponse.body as KycCase & { customer: Customer; signals: RiskSignal[] };
+    expect(computeRisk(detail.customer, new Date()).score).toBe(5);
+
+    const response = await authenticated().get('/api/cases/c-1/risk-explanation').expect(200);
+    const explanation = response.body as RiskExplanation;
+    expect(explanation).toMatchObject({
+      caseId: detail.id,
+      riskScore: detail.riskScore,
+      riskLevel: detail.riskLevel,
+      rawScore: 65,
+      scoreCapped: false,
+    });
+    expect(explanation.factors).toEqual(detail.signals.map((s, index) => ({
+      signalId: s.id,
+      code: s.code,
+      title: s.title,
+      description: s.description,
+      severity: s.severity,
+      weight: s.weight,
+      contributionPct: [92, 8][index],
+    })));
+    expect(explanation.primaryDriver).toEqual(explanation.factors[0]);
+    expect(explanation.primaryDriver?.signalId).toBe('saved-sanctions');
+
+    vi.setSystemTime(new Date('2030-06-01T00:00:00Z'));
+    expect(computeRisk(detail.customer, new Date()).score).toBe(0);
+    const later = await authenticated().get('/api/cases/c-1/risk-explanation').expect(200);
+    expect(later.body).toEqual(explanation);
+    expect((await authenticated().get('/api/cases/c-1').expect(200)).body).toEqual(detail);
+    expect(db.prepare('SELECT total_changes() AS count').get()).toEqual(changesBefore);
+  });
+
+  it('risk explanation preserves legacy scores when there are no recorded signals', async () => {
+    const detail = await authenticated().get('/api/cases/c-1').expect(200);
+    const res = await authenticated().get('/api/cases/c-1/risk-explanation').expect(200);
+    expect(res.body).toMatchObject({
+      riskScore: detail.body.riskScore,
+      riskLevel: detail.body.riskLevel,
+      rawScore: 0,
+      scoreCapped: false,
+      factors: [],
+      primaryDriver: null,
+    });
+    expect(res.body.summary).toContain('no risk signals were recorded');
+    expect(res.body.summary).toContain('recorded score does not match');
+  });
+
+  it('GET /api/cases/:id/risk-explanation unknown → 404 NOT_FOUND', async () => {
+    const res = await authenticated().get('/api/cases/nope/risk-explanation');
+    expect(res.status).toBe(404);
+    expect(res.body.error.code).toBe('NOT_FOUND');
+  });
+
   it('GET /api/cases/:id/audit returns events ascending', async () => {
-    const res = await request(app).get('/api/cases/c-1/audit');
+    const res = await authenticated().get('/api/cases/c-1/audit');
     expect(res.status).toBe(200);
     expect(res.body[0].sequence).toBe(1);
   });
@@ -173,11 +253,11 @@ describe('HTTP API', () => {
   it('POST approve returns updated case with audit + allowedActions', async () => {
     const res = await request(app)
       .post('/api/cases/c-1/actions')
-      .set('x-analyst-id', 'ana-001')
+      .set('x-analyst-id', 'ana-006')
       .send({ action: 'approve', note: 'high risk approval with justification' });
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('approved');
-    expect(res.body.assignedTo).toBe('ana-001');
+    expect(res.body.assignedTo).toBe('ana-006');
     expect(res.body.allowedActions).toEqual([]);
     expect(res.body.audit).toHaveLength(2);
     expect(res.body.audit[1].action).toBe('approve');
@@ -210,14 +290,17 @@ describe('HTTP API', () => {
     expect(res.status).toBe(400);
   });
 
-  it('GET /api/me defaults to ana-001 on reads', async () => {
-    const res = await request(app).get('/api/me');
+  it('GET /api/me uses the selected analyst without granting decision permissions', async () => {
+    const res = await authenticated().get('/api/me');
     expect(res.status).toBe(200);
-    expect(res.body.id).toBe('ana-001');
+    expect(res.body.id).toBe('ana-003');
+    expect(res.body.permissions).toContain('cases:review');
+    expect(res.body.permissions).not.toContain('cases:decide_high');
+    expect(res.headers['cache-control']).toBe('no-store');
   });
 
   it('GET /api/cases/stats returns counts', async () => {
-    const res = await request(app).get('/api/cases/stats');
+    const res = await authenticated().get('/api/cases/stats');
     expect(res.status).toBe(200);
     expect(res.body.total).toBe(3);
     expect(res.body.byStatus.pending).toBe(1);
@@ -226,8 +309,8 @@ describe('HTTP API', () => {
 });
 
 describe('Risk policy API', () => {
-  it('GET /api/policy returns defaults with version 0', async () => {
-    const res = await request(app).get('/api/policy');
+  it('GET /api/risk-policy returns defaults with version 0', async () => {
+    const res = await authenticated().get('/api/risk-policy');
     expect(res.status).toBe(200);
     expect(res.body.version).toBe(0);
     expect(res.body.thresholds).toEqual({ medium: 30, high: 60 });
@@ -236,47 +319,47 @@ describe('Risk policy API', () => {
     expect(sanctions.defaultWeight).toBe(40);
   });
 
-  it('PUT /api/policy requires the compliance_manager role', async () => {
-    const anon = await request(app).put('/api/policy').send({ thresholds: { high: 70 } });
+  it('PUT /api/risk-policy requires the compliance_manager role', async () => {
+    const anon = await request(app).put('/api/risk-policy').send({ thresholds: { high: 70 } });
     expect(anon.status).toBe(401);
     const senior = await request(app)
-      .put('/api/policy')
+      .put('/api/risk-policy')
       .set('x-analyst-id', 'ana-001')
       .send({ thresholds: { high: 70 } });
     expect(senior.status).toBe(403);
     expect(senior.body.error.code).toBe('FORBIDDEN');
   });
 
-  it('PUT /api/policy rejects invalid thresholds and unknown rules', async () => {
+  it('PUT /api/risk-policy rejects invalid thresholds and unknown rules', async () => {
     const inverted = await request(app)
-      .put('/api/policy')
+      .put('/api/risk-policy')
       .set('x-analyst-id', 'ana-006')
       .send({ thresholds: { medium: 70, high: 60 } });
     expect(inverted.status).toBe(400);
     expect(inverted.body.error.code).toBe('VALIDATION_ERROR');
     const unknown = await request(app)
-      .put('/api/policy')
+      .put('/api/risk-policy')
       .set('x-analyst-id', 'ana-006')
       .send({ weights: { BOGUS: 5 } });
     expect(unknown.status).toBe(400);
     const outOfRange = await request(app)
-      .put('/api/policy')
+      .put('/api/risk-policy')
       .set('x-analyst-id', 'ana-006')
       .send({ weights: { PEP: 101 } });
     expect(outOfRange.status).toBe(400);
   });
 
-  it('PUT /api/policy persists, logs history and re-scores open cases only', async () => {
+  it('PUT /api/risk-policy persists, logs history and re-scores open cases only', async () => {
     // c-1 (pending) and c-2 (in_review) customers are clean → score 0 under any weights.
     db.prepare("UPDATE customers SET pep_flag = 1 WHERE id IN ('c-1-cust', 'c-3-cust')").run();
 
     const res = await request(app)
-      .put('/api/policy')
+      .put('/api/risk-policy')
       .set('x-analyst-id', 'ana-006')
       .send({ weights: { PEP: 65 }, thresholds: { high: 65 } });
     expect(res.status).toBe(200);
     expect(res.body.policy.version).toBe(1);
-    expect(res.body.policy.updatedBy).toBe('Dana Whitcombe');
+    expect(res.body.policy.updatedBy).toBe('Sofia Chen');
     expect(res.body.change.changes).toEqual([
       { key: 'weights.PEP', from: 30, to: 65 },
       { key: 'thresholds.high', from: 60, to: 65 },
@@ -284,7 +367,7 @@ describe('Risk policy API', () => {
     // c-1: 70 → 65 (high stays high, score changed); c-2: 40 → 0 (medium → low); c-3 closed.
     expect(res.body.change.recomputedCases).toBe(2);
 
-    const c1 = await request(app).get('/api/cases/c-1');
+    const c1 = await authenticated().get('/api/cases/c-1');
     expect(c1.body.riskScore).toBe(65);
     expect(c1.body.riskLevel).toBe('high');
     expect(c1.body.signals.map((s: { code: string }) => s.code)).toEqual(['PEP']);
@@ -294,31 +377,31 @@ describe('Risk policy API', () => {
     expect(lastEvent.toStatus).toBe('pending');
     expect(verifyChain(c1.body.audit)).toBe(true);
 
-    const c3 = await request(app).get('/api/cases/c-3');
+    const c3 = await authenticated().get('/api/cases/c-3');
     expect(c3.body.riskScore).toBe(5);
     expect(c3.body.audit).toHaveLength(1);
     // Closed case: explanation describes the persisted assessment, not a fresh score.
-    const c3Explanation = await request(app).get('/api/cases/c-3/risk-explanation');
+    const c3Explanation = await authenticated().get('/api/cases/c-3/risk-explanation');
     expect(c3Explanation.body.riskScore).toBe(5);
     expect(c3Explanation.body.factors.map((f: { code: string }) => f.code)).toEqual(
       c3.body.signals.map((s: { code: string }) => s.code),
     );
 
-    const explanation = await request(app).get('/api/cases/c-1/risk-explanation');
+    const explanation = await authenticated().get('/api/cases/c-1/risk-explanation');
     expect(explanation.body.thresholds).toEqual({ medium: 30, high: 65 });
 
-    const history = await request(app).get('/api/policy/history');
+    const history = await authenticated().get('/api/risk-policy/history');
     expect(history.body).toHaveLength(1);
     expect(history.body[0].version).toBe(1);
 
-    const policy = await request(app).get('/api/policy');
+    const policy = await authenticated().get('/api/risk-policy');
     expect(policy.body.version).toBe(1);
     expect(policy.body.rules.find((r: { code: string }) => r.code === 'PEP').weight).toBe(65);
   });
 
-  it('PUT /api/policy with no effective change is a no-op', async () => {
+  it('PUT /api/risk-policy with no effective change is a no-op', async () => {
     const res = await request(app)
-      .put('/api/policy')
+      .put('/api/risk-policy')
       .set('x-analyst-id', 'ana-006')
       .send({ weights: { PEP: 30 } });
     expect(res.status).toBe(200);

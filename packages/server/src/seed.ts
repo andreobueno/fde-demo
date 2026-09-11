@@ -1,6 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { openDb } from './db.js';
 import { schemaSql } from './schema.js';
+import { migrateRefundAudit } from './migrations.js';
+import { seedRefunds } from './seedRefunds.js';
+import { insertAuditEvent } from './repo/audit.js';
 import { computeRisk } from './domain/risk.js';
 import { computeEventHash, GENESIS_HASH } from './domain/audit.js';
 import type { Analyst, CaseStatus, Customer } from './types.js';
@@ -62,7 +65,7 @@ const ANALYSTS: Analyst[] = [
   { id: 'ana-003', name: 'Grete Lindholm', role: 'analyst' },
   { id: 'ana-004', name: 'Kwame Osei', role: 'analyst' },
   { id: 'ana-005', name: 'Ines Morales', role: 'analyst' },
-  { id: 'ana-006', name: 'Dana Whitcombe', role: 'compliance_manager' },
+  { id: 'ana-006', name: 'Sofia Chen', role: 'compliance_manager' },
 ];
 
 const APPROVE_NOTES = [
@@ -94,6 +97,7 @@ const db = openDb();
 function resetSchema() {
   db.exec('PRAGMA foreign_keys = OFF;');
   for (const t of [
+    'policy_audit_events', 'review_policy', 'refunds', 'case_risk_thresholds',
     'audit_events', 'risk_signals', 'cases', 'customers', 'analysts',
     'risk_policy', 'risk_policy_changes',
   ]) {
@@ -105,6 +109,7 @@ function resetSchema() {
   db.exec('DROP TRIGGER IF EXISTS risk_policy_changes_no_delete;');
   db.exec(schemaSql());
   db.exec('PRAGMA foreign_keys = ON;');
+  migrateRefundAudit(db);
 }
 
 resetSchema();
@@ -121,9 +126,6 @@ const insertCase = db.prepare(`INSERT INTO cases
   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`);
 const insertSignal = db.prepare(`INSERT INTO risk_signals
   (id, case_id, code, title, description, severity, weight) VALUES (?, ?, ?, ?, ?, ?, ?)`);
-const insertEvent = db.prepare(`INSERT INTO audit_events
-  (id, case_id, sequence, actor_id, actor_name, action, from_status, to_status, note, created_at, prev_hash, hash)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
 
 interface EventSpec {
   actor: Analyst;
@@ -137,6 +139,7 @@ function seed() {
   const now = new Date();
   const analysts = ANALYSTS;
   const seniors = analysts.filter((a) => a.role === 'senior_analyst');
+  const managers = analysts.filter((a) => a.role === 'compliance_manager');
   const juniors = analysts.filter((a) => a.role !== 'compliance_manager');
 
   const run = db.transaction(() => {
@@ -188,6 +191,7 @@ function seed() {
       );
 
       const { score, level, signals } = computeRisk(customer, now);
+      const decisionMakers = level === 'high' ? managers : [...seniors, ...managers];
       const caseId = `case-${String(i + 1).padStart(3, '0')}`;
       const reference = `KYC-2026-${String(i + 1).padStart(4, '0')}`;
       const createdAt = new Date(now.getTime() - int(1, 45) * 86400_000).toISOString();
@@ -221,23 +225,27 @@ function seed() {
         assignedTo = actor.id;
       }
       if (status === 'approved') {
+        const decisionMaker = pick(decisionMakers);
         events.push({
-          actor, action: 'approve', fromStatus: 'in_review', toStatus: 'approved',
+          actor: decisionMaker, action: 'approve', fromStatus: 'in_review', toStatus: 'approved',
           note: pick(APPROVE_NOTES),
         });
+        assignedTo = decisionMaker.id;
       } else if (status === 'rejected') {
+        const decisionMaker = pick(decisionMakers);
         events.push({
-          actor, action: 'reject', fromStatus: 'in_review', toStatus: 'rejected',
+          actor: decisionMaker, action: 'reject', fromStatus: 'in_review', toStatus: 'rejected',
           note: pick(REJECT_NOTES),
         });
+        assignedTo = decisionMaker.id;
       } else if (status === 'escalated') {
         events.push({
           actor, action: 'escalate', fromStatus: 'in_review', toStatus: 'escalated',
           note: pick(ESCALATE_NOTES),
         });
-        // Some escalated cases get resolved by a senior analyst.
+        // Some escalated cases have already been resolved.
         if (chance(0.5)) {
-          const senior = pick(seniors);
+          const senior = pick(decisionMakers);
           const resolved = chance(0.5);
           events.push({
             actor: senior,
@@ -279,15 +287,13 @@ function seed() {
           createdAt: eventTime,
         };
         const hash = computeEventHash(prevHash, fields);
-        insertEvent.run(
-          randomUUID(), caseId, sequence, e.actor.id, e.actor.name, e.action,
-          e.fromStatus, e.toStatus, e.note, eventTime, prevHash, hash,
-        );
+        insertAuditEvent(db, { id: randomUUID(), ...fields, actorName: e.actor.name, prevHash, hash });
         prevHash = hash;
       });
     }
   });
   run();
+  seedRefunds(db, now);
 
   const counts = db
     .prepare('SELECT status, COUNT(*) AS n FROM cases GROUP BY status ORDER BY status')
