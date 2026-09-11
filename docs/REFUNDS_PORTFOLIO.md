@@ -89,6 +89,13 @@ Integrated result: **1,332 server + 107 web = 1,439 tests passed** across 25 fil
 `npm test`, `npm run lint`, `npm run typecheck`, `npm run build:web`, and `git diff --check`
 passed after integrating backend and frontend. Test counts are not a measured line-coverage percentage.
 
+An additional integration smoke check ran the actual frontend API client over HTTP against Express
+using a copy of the retained demo database. Migration and additive seeding preserved all 60 KYC
+cases, 122 original case audit events, customer/analyst records and policy history. Refund
+approval/rejection, forbidden decisions, duplicate rejection, combined filtering and exact counter
+changes passed; the browser hash verifier accepted the real API histories. Reseeding retained the
+new decisions. This check did not modify decisions in the live demo database.
+
 These are automated domain, HTTP and rendering checks; they are not a browser interaction recording.
 
 ## Architectural weaknesses exposed
