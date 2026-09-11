@@ -1,6 +1,7 @@
 import type {
   ActionResponse,
   Analyst,
+  AuthenticatedAnalyst,
   ApiErrorBody,
   CaseAction,
   CaseDetail,
@@ -33,15 +34,15 @@ export class ApiUnreachableError extends Error {
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
 export interface ApiClient {
-  analysts(analystId: string): Promise<Analyst[]>;
-  me(analystId: string): Promise<Analyst>;
-  stats(analystId: string): Promise<CaseStats>;
-  listCases(filters: QueueFilters, analystId: string): Promise<CaseListResponse>;
-  getCase(id: string, analystId: string): Promise<CaseDetail>;
-  riskExplanation(id: string, analystId: string): Promise<RiskExplanation>;
+  analysts(accessToken: string): Promise<Analyst[]>;
+  me(accessToken: string): Promise<AuthenticatedAnalyst>;
+  stats(accessToken: string): Promise<CaseStats>;
+  listCases(filters: QueueFilters, accessToken: string): Promise<CaseListResponse>;
+  getCase(id: string, accessToken: string): Promise<CaseDetail>;
+  riskExplanation(id: string, accessToken: string): Promise<RiskExplanation>;
   performAction(
     id: string,
-    analystId: string,
+    accessToken: string,
     action: CaseAction,
     note: string | undefined,
   ): Promise<ActionResponse>;
@@ -60,18 +61,19 @@ function isApiErrorBody(value: unknown): value is ApiErrorBody {
 export function createApiClient(baseUrl: string, fetchImpl: FetchLike = fetch): ApiClient {
   async function request<T>(
     path: string,
-    analystId: string,
+    accessToken: string,
     init: Omit<RequestInit, 'headers'> & { headers?: Record<string, string> } = {},
   ): Promise<T> {
     let res: Response;
     try {
       res = await fetchImpl(`${baseUrl}${path}`, {
         ...init,
-        headers: { ...init.headers, 'x-analyst-id': analystId },
+        headers: { ...init.headers, authorization: `Bearer ${accessToken}` },
       });
     } catch (cause) {
       throw new ApiUnreachableError(cause);
     }
+    if (res.status === 401) throw new ApiError(401, 'UNAUTHORIZED', 'Sign in with a valid access token.');
     const text = await res.text();
     let body: unknown = null;
     if (text.length > 0) {
@@ -83,7 +85,7 @@ export function createApiClient(baseUrl: string, fetchImpl: FetchLike = fetch): 
     }
     if (!res.ok) {
       if (isApiErrorBody(body)) {
-        throw new ApiError(res.status, body.error.code, body.error.message);
+        throw new ApiError(res.status, body.error.code, body.error.message.replaceAll(accessToken, '[redacted]'));
       }
       throw new ApiError(res.status, 'HTTP_ERROR', `API responded with HTTP ${res.status}`);
     }
@@ -91,18 +93,18 @@ export function createApiClient(baseUrl: string, fetchImpl: FetchLike = fetch): 
   }
 
   return {
-    analysts: (analystId) => request<Analyst[]>('/api/analysts', analystId),
-    me: (analystId) => request<Analyst>('/api/me', analystId),
-    stats: (analystId) => request<CaseStats>('/api/cases/stats', analystId),
-    listCases: (filters, analystId) => {
+    analysts: (accessToken) => request<Analyst[]>('/api/analysts', accessToken),
+    me: (accessToken) => request<AuthenticatedAnalyst>('/api/me', accessToken),
+    stats: (accessToken) => request<CaseStats>('/api/cases/stats', accessToken),
+    listCases: (filters, accessToken) => {
       const qs = filtersToApiQuery(filters).toString();
-      return request<CaseListResponse>(`/api/cases${qs ? `?${qs}` : ''}`, analystId);
+      return request<CaseListResponse>(`/api/cases${qs ? `?${qs}` : ''}`, accessToken);
     },
-    getCase: (id, analystId) => request<CaseDetail>(`/api/cases/${encodeURIComponent(id)}`, analystId),
-    riskExplanation: (id, analystId) =>
-      request<RiskExplanation>(`/api/cases/${encodeURIComponent(id)}/risk-explanation`, analystId),
-    performAction: (id, analystId, action, note) =>
-      request<ActionResponse>(`/api/cases/${encodeURIComponent(id)}/actions`, analystId, {
+    getCase: (id, accessToken) => request<CaseDetail>(`/api/cases/${encodeURIComponent(id)}`, accessToken),
+    riskExplanation: (id, accessToken) =>
+      request<RiskExplanation>(`/api/cases/${encodeURIComponent(id)}/risk-explanation`, accessToken),
+    performAction: (id, accessToken, action, note) =>
+      request<ActionResponse>(`/api/cases/${encodeURIComponent(id)}/actions`, accessToken, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(note === undefined ? { action } : { action, note }),

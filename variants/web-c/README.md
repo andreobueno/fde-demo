@@ -11,8 +11,22 @@ dialog and the post-action refresh; every interaction also works as a plain form
 npm install                 # repo root
 npm run seed                # populate packages/server/data/kyc.db
 npm run dev:server          # API on http://localhost:4000
-npm run dev:web-c           # web console on http://localhost:3000 (PORT / KYC_API_URL env to override)
+ALLOW_INSECURE_LOCAL_AUTH=true npm run dev:web-c  # explicit local HTTP opt-in on http://localhost:3000
 ```
+
+Have an administrator issue an access token for your user using the API's administrative credential
+CLI, then enter it in the console's sign-in form. Seeding does not issue credentials. Tokens contain
+32 random bytes encoded as base64url (43 characters), expire after eight hours and can be revoked
+through the administrative CLI. There is no default user or freely selectable identity.
+
+The console uses `Secure` cookies by default and requires HTTPS for sign-in and other form submissions.
+For local HTTP development only, set `ALLOW_INSECURE_LOCAL_AUTH=true` as above. This setting is refused
+when `NODE_ENV=production`; other values do not disable `Secure`. For TLS deployments, terminate HTTPS
+in front of the console and preserve the browser-facing `Host` header. The app checks `Origin` against
+that host and HTTPS (or the direct request protocol with the local opt-in); it does not trust
+`X-Forwarded-Host` or `X-Forwarded-Proto`. POST requests without a matching `Origin` are rejected.
+Use `PORT` and `KYC_API_URL` to override the listener port and API URL; use a protected transport to the
+API when it is not on the same local machine.
 
 Checks: `npm run typecheck:web-c`, `npm run lint:web-c`, `npm run test:web-c`, `npm run build:web-c`
 (`build` type-checks and emits `dist/`; the dev/start scripts run the TypeScript sources with `tsx`).
@@ -27,18 +41,26 @@ Checks: `npm run typecheck:web-c`, `npm run lint:web-c`, `npm run test:web-c`, `
   - `GET /cases/:id/actions/:action` returns the confirm `<dialog>` fragment (or the case page with the
     dialog inline when JS is off).
   - `POST /cases/:id/actions/:action` makes a preliminary note check (current policy is enforced by the API), forwards
-    to the API with `x-analyst-id`, and on success swaps `#case-main` plus out-of-band swaps that close the
+    to the API with `Authorization: Bearer <token>`, and on success swaps `#case-main` plus out-of-band swaps that close the
     dialog and show a toast. Validation/403/409 messages from the API are re-rendered inside the dialog
     (`HX-Retarget`). Without JS the POST redirects back to the case with `?done=<action>`.
-- Analyst identity is an `analyst_id` cookie (HttpOnly, SameSite=Lax) set by `POST /switch-analyst`; the
-  header select submits on change via htmx (`HX-Refresh`) or via the visible "Switch" button without JS.
-  Every API call forwards this identity, including reads and identity-list bootstrap. New visitors
-  use `ana-003` (analyst). An invalid persisted ID can recover through a GET or the identity switcher;
-  case mutations with an invalid ID fail without retrying as another user. This remains demo impersonation.
+- `POST /sign-in` verifies the submitted credential with `GET /api/me` before storing it in the
+  `kyc_access_token` cookie (`HttpOnly`, `SameSite=Strict`, `Secure`, `Path=/`, maximum age eight hours).
+  Every protected request rechecks `/api/me`, derives the displayed user from that response and forwards
+  the token in API authorization headers. The analysts directory supplies labels and filters only.
+  Tokens are never included in rendered HTML, links or hidden form fields; legacy `analyst_id` cookies
+  are cleared and cannot authenticate. Invalid, expired or revoked credentials clear the browser cookie
+  and return HTTP 401 with sign-in UI; htmx receives `HX-Redirect: /sign-in` for a full-page navigation.
+- `POST /sign-out` clears the browser credential and redirects to the sign-in page. To switch users,
+  sign out and enter the other user's valid token. Signing out does not revoke an admin-issued token;
+  revocation is performed through the administrative CLI. No request retries under a fallback identity.
 - Audit chain verification is computed in Node (`src/lib/audit.ts`, mirrors `packages/server/src/domain/audit.ts`).
 - Security headers: a CSP of `default-src 'self'; script-src 'self'; style-src 'self'; ...` (no inline
   scripts or styles — the risk meters use `<meter>` instead of inline widths), `X-Content-Type-Options`,
   `Cache-Control: no-store`. All output is escaped by React; `dangerouslySetInnerHTML` is never used.
+- Sensitive pages opt out of htmx history storage and discard existing htmx snapshots on page load.
+  History cache misses and browser back/forward cache restores reload from the server so the active
+  credential is revalidated.
 - `public/app.js` (~60 lines of vanilla JS) is the only custom client code: it turns the swapped
   `<dialog>` into a modal (`showModal()` → Esc closes, focus lands in the textarea), makes queue rows
   clickable, auto-hides the toast and reports htmx network errors. The app is fully usable without it.
@@ -60,8 +82,11 @@ Dev-only: `typescript`, `tsx` (run TS directly), `vitest` + `supertest` (route t
 
 `test/routes.test.ts` drives the Express app with supertest against a stubbed `fetch` (queue rendering,
 htmx fragment + `HX-Push-Url`, unreachable API page, case page formatting and chain indicator, 404 page,
-dialog fragment, action POST forwarding note + `x-analyst-id`, client-side and server-side validation
-errors rendered in the dialog, analyst cookie). `test/filters.test.ts` covers URL ↔ filter state,
+dialog fragment, action POST forwarding note + bearer credential, client-side and server-side validation
+errors rendered in the dialog, sign-in/sign-out, expired/revoked credentials, cookie attributes,
+local HTTP opt-in, production fail-closed configuration and cross-site request rejection).
+Synthetic fixture tokens and a stubbed API exercise the contract; these are not live-API or browser tests.
+`test/filters.test.ts` covers URL ↔ filter state,
 `test/validation.test.ts` the note rules, `test/audit.test.ts` the hash-chain verifier against a fixture
 captured from the seeded DB (`test/fixtures-audit.json`).
 

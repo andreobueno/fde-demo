@@ -1,55 +1,38 @@
 import type { ReactNode } from 'react';
 import type { Analyst } from '../api/types.js';
+import { humanise } from '../lib/format.js';
 
 export interface LayoutProps {
   title: string;
-  analysts: Analyst[];
-  currentAnalystId: string;
-  returnTo: string;
+  currentAnalyst: Analyst | null;
   toast?: string | undefined;
   children: ReactNode;
 }
 
-export function Layout({ title, analysts, currentAnalystId, returnTo, toast, children }: LayoutProps) {
-  const current = analysts.find((a) => a.id === currentAnalystId);
+export function Layout({ title, currentAnalyst, toast, children }: LayoutProps) {
   return (
     <html lang="en">
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <meta name="htmx-config" content='{"includeIndicatorStyles":false}' />
+        <meta name="htmx-config" content='{"includeIndicatorStyles":false,"historyCacheSize":0,"refreshOnHistoryMiss":true}' />
         <title>{`${title} · KYC Review Console`}</title>
         <link rel="stylesheet" href="/styles.css" />
         <script src="/htmx.min.js" defer />
         <script src="/app.js" defer />
       </head>
-      <body>
+      <body hx-history="false">
         <header className="topbar">
           <a className="brand" href="/">
             KYC Review Console
           </a>
-          <form
-            className="analyst-switcher"
-            method="post"
-            action="/switch-analyst"
-            hx-post="/switch-analyst"
-            hx-trigger="change"
-            hx-swap="none"
-          >
-            <input type="hidden" name="returnTo" value={returnTo} />
-            <label htmlFor="analyst-select">Acting as</label>
-            <select id="analyst-select" name="analystId" defaultValue={currentAnalystId}>
-              {analysts.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.name} ({a.role === 'senior_analyst' ? 'senior' : 'analyst'})
-                </option>
-              ))}
-            </select>
-            {current ? <span className="muted analyst-id">{current.id}</span> : null}
-            <button type="submit" className="btn btn-small no-js-only">
-              Switch
-            </button>
-          </form>
+          {currentAnalyst ? (
+            <form className="analyst-switcher" method="post" action="/sign-out">
+              <span>Signed in as {currentAnalyst.name} ({humanise(currentAnalyst.role)})</span>
+              <span className="muted analyst-id">{currentAnalyst.id}</span>
+              <button type="submit" className="btn btn-small">Sign out / switch user</button>
+            </form>
+          ) : null}
         </header>
         <div id="toast" className={toast ? 'toast' : 'toast toast-hidden'} role="status" aria-live="polite">
           {toast ?? ''}
@@ -58,6 +41,23 @@ export function Layout({ title, analysts, currentAnalystId, returnTo, toast, chi
         <div id="dialog-slot" />
       </body>
     </html>
+  );
+}
+
+export function SignIn({ error }: { error: string | null }) {
+  return (
+    <section className="panel">
+      <h1>Sign in</h1>
+      <p>Use an access token issued to you by an administrator. Tokens expire after eight hours and can be revoked.</p>
+      {error ? <p className="form-error" role="alert">{error}</p> : null}
+      <form method="post" action="/sign-in" autoComplete="off">
+        <label htmlFor="access-token">Access token</label>
+        <input id="access-token" name="accessToken" type="password" required
+          minLength={43} maxLength={43} pattern="[A-Za-z0-9_-]{43}" autoComplete="off" spellCheck={false} />
+        <button type="submit" className="btn btn-primary">Sign in</button>
+      </form>
+      <p className="muted">Signing out clears this browser’s credential. Ask an administrator to revoke the token.</p>
+    </section>
   );
 }
 

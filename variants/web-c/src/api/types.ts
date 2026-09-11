@@ -22,6 +22,10 @@ export interface Analyst {
   role: AnalystRole;
 }
 
+export interface AuthenticatedAnalyst extends Analyst {
+  permissions: string[];
+}
+
 export interface Customer {
   id: string;
   fullName: string;
