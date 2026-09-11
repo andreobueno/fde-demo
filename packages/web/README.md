@@ -8,14 +8,19 @@ From the repo root:
 
 ```sh
 npm install
-npm run seed          # idempotent; recreates the demo DB in packages/server
+npm run seed          # destructive reset of the fictional database
+mkdir -p -m 700 .auth
+npm run auth:issue -w packages/server -- ana-003 "$PWD/.auth/analyst.token"
 npm run dev:server    # API on http://localhost:4000
 npm run dev:web     # this app on http://localhost:5173
 ```
 
 Vite proxies `/api/*` to `http://localhost:4000` (see `vite.config.ts`), so the SPA
-makes same-origin requests and no CORS setup is needed. Analyst identity is sent via
-the `x-analyst-id` header, selected in the header dropdown (persisted in localStorage).
+makes same-origin requests and no CORS setup is needed. Enter the issued credential in the
+sign-in form. `/api/me` verifies it before sensitive routes load; all API requests send a bearer
+credential and an expected-identity guard. The token stays in memory only. Sign-out/switching users
+clears sensitive views, aborts pending requests and requires another credential. Reloading also
+requires sign-in. See the root README for expiry, revocation and production requirements.
 
 Other scripts: `npm run build:web`, `npm run lint:web`, `npm run typecheck:web`,
 `npm run test:web` (also `preview` inside this workspace).

@@ -3,6 +3,14 @@
   'use strict';
   document.documentElement.classList.add('js');
 
+  try {
+    window.sessionStorage.removeItem('htmx-history-cache');
+  } catch (_err) {}
+
+  window.addEventListener('pageshow', function (evt) {
+    if (evt.persisted) window.location.reload();
+  });
+
   function openDialog(root) {
     var dialog = root.querySelector('dialog');
     if (!dialog) return;

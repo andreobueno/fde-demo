@@ -97,7 +97,7 @@ const db = openDb();
 function resetSchema() {
   db.exec('PRAGMA foreign_keys = OFF;');
   for (const t of [
-    'policy_audit_events', 'review_policy', 'refunds', 'case_risk_thresholds',
+    'access_tokens', 'policy_audit_events', 'review_policy', 'refunds', 'case_risk_thresholds',
     'audit_events', 'risk_signals', 'cases', 'customers', 'analysts',
     'risk_policy', 'risk_policy_changes',
   ]) {

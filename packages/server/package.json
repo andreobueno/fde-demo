@@ -8,6 +8,8 @@
     "start": "tsx src/index.ts",
     "seed": "tsx src/seed.ts",
     "seed:refunds": "tsx src/seedRefundsCli.ts",
+    "auth:issue": "tsx src/authIssueCli.ts",
+    "auth:revoke": "tsx src/authRevokeCli.ts",
     "test": "vitest run",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit"

@@ -13,11 +13,11 @@ import { verifyChain } from './lib/audit.js';
 import { parseFilters, queueUrl } from './lib/filters.js';
 import { ACTION_LABELS, normaliseNote, validateNote } from './lib/validation.js';
 import { ActionDialog, CaseMain, NotFoundCase } from './views/CasePage.js';
-import { ErrorPanel, Layout } from './views/Layout.js';
+import { ErrorPanel, Layout, SignIn } from './views/Layout.js';
 import { QueuePage, QueueResults } from './views/QueuePage.js';
 
-export const DEFAULT_ANALYST_ID = 'ana-003';
-const ANALYST_COOKIE = 'analyst_id';
+const AUTH_COOKIE = 'kyc_access_token';
+const TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 
 const CSP = [
   "default-src 'self'",
@@ -43,7 +43,8 @@ export interface AppOptions {
 
 interface RequestContext {
   analysts: Analyst[];
-  analystId: string;
+  analyst: Analyst;
+  accessToken: string;
   isHx: boolean;
 }
 
@@ -70,11 +71,6 @@ function isCaseAction(value: string): value is CaseAction {
   return (CASE_ACTIONS as readonly string[]).includes(value);
 }
 
-function safeReturnTo(value: unknown): string {
-  if (typeof value === 'string' && value.startsWith('/') && !value.startsWith('//')) return value;
-  return '/';
-}
-
 function html(element: ReactElement): string {
   return `<!doctype html>\n${renderToStaticMarkup(element)}`;
 }
@@ -84,31 +80,60 @@ function fragment(element: ReactElement): string {
 }
 
 export function createApp({ api, publicDir }: AppOptions) {
+  const insecureLocalAuth = process.env.ALLOW_INSECURE_LOCAL_AUTH === 'true';
+  if (insecureLocalAuth && process.env.NODE_ENV === 'production') {
+    throw new Error('ALLOW_INSECURE_LOCAL_AUTH is not permitted in production.');
+  }
+  const cookieOptions = {
+    httpOnly: true,
+    sameSite: 'strict' as const,
+    secure: !insecureLocalAuth,
+    path: '/',
+  };
   const app = express();
   app.disable('x-powered-by');
   app.set('etag', false);
 
-  let lastAnalysts: Analyst[] | null = null;
-  async function context(req: Request, recoverIdentity = req.method === 'GET'): Promise<RequestContext> {
-    let analystId = parseCookies(req.headers.cookie)[ANALYST_COOKIE] || DEFAULT_ANALYST_ID;
-    let analysts: Analyst[];
-    try {
-      analysts = await api.analysts(analystId);
-    } catch (err) {
-      if (!recoverIdentity || analystId === DEFAULT_ANALYST_ID || !(err instanceof ApiError) || err.status !== 401) {
-        throw err;
-      }
-      analystId = DEFAULT_ANALYST_ID;
-      analysts = await api.analysts(analystId);
+  function clearCredential(res: Response) {
+    res.clearCookie(AUTH_COOKIE, cookieOptions);
+    res.clearCookie('analyst_id', cookieOptions);
+  }
+
+  function signInPage(req: Request, res: Response, status: number) {
+    if (req.get('HX-Request') === 'true') {
+      res.setHeader('HX-Redirect', '/sign-in');
+      res.status(status).end();
+      return;
     }
-    lastAnalysts = analysts;
-    return { analysts, analystId, isHx: req.get('HX-Request') === 'true' };
+    res.status(status).type('html').send(html(Layout({
+      title: 'Sign in',
+      currentAnalyst: null,
+      children: SignIn({ error: status === 401 ? 'Sign in with a valid access token.' : null }),
+    })));
+  }
+
+  function redirectPage(req: Request, res: Response, location: string) {
+    if (req.get('HX-Request') === 'true') {
+      res.setHeader('HX-Redirect', location);
+      res.status(204).end();
+      return;
+    }
+    res.redirect(303, location);
+  }
+
+  async function context(req: Request): Promise<RequestContext> {
+    const accessToken = parseCookies(req.headers.cookie)[AUTH_COOKIE] ?? '';
+    if (!TOKEN_PATTERN.test(accessToken)) {
+      throw new ApiError(401, 'UNAUTHORIZED', 'Sign in with a valid access token.');
+    }
+    const analyst = await api.me(accessToken);
+    const analysts = await api.analysts(accessToken);
+    return { analysts, analyst, accessToken, isHx: req.get('HX-Request') === 'true' };
   }
 
   function page(
     res: Response,
     ctx: RequestContext,
-    req: Request,
     title: string,
     body: ReactElement,
     opts: { status?: number; toast?: string | undefined } = {},
@@ -120,9 +145,7 @@ export function createApp({ api, publicDir }: AppOptions) {
         html(
           Layout({
             title,
-            analysts: ctx.analysts,
-            currentAnalystId: ctx.analystId,
-            returnTo: req.originalUrl,
+            currentAnalyst: ctx.analyst,
             toast: opts.toast,
             children: body,
           }),
@@ -140,36 +163,50 @@ export function createApp({ api, publicDir }: AppOptions) {
 
   const staticDir = publicDir ?? path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
   app.use(express.static(staticDir, { index: false, cacheControl: false }));
+  app.use((req, res, next) => {
+    if (parseCookies(req.headers.cookie).analyst_id !== undefined) {
+      res.clearCookie('analyst_id', cookieOptions);
+    }
+    if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
+    try {
+      const protocol = cookieOptions.secure ? 'https' : req.protocol;
+      const origin = new URL(`${protocol}://${req.get('host')}`).origin;
+      if (req.get('Origin') === origin && req.get('Sec-Fetch-Site') !== 'cross-site') return next();
+    } catch {
+      // Invalid hosts cannot establish a same-origin request.
+    }
+    res.status(403).type('text').send('A same-origin form submission is required.');
+  });
   app.use(express.urlencoded({ extended: false }));
 
   app.get('/health', (_req, res) => {
     res.json({ ok: true });
   });
 
-  app.post('/switch-analyst', async (req, res, next) => {
+  app.get('/sign-in', (req, res) => {
+    signInPage(req, res, 200);
+  });
+
+  app.post('/sign-in', async (req, res, next) => {
+    clearCredential(res);
     try {
-      const { analysts } = await context(req, true);
       const body = req.body as Record<string, unknown>;
-      const requested = typeof body.analystId === 'string' ? body.analystId : '';
-      if (!analysts.some((a) => a.id === requested)) {
-        res.status(400).type('text').send('Unknown analyst');
+      const accessToken = typeof body.accessToken === 'string' ? body.accessToken : '';
+      if (!TOKEN_PATTERN.test(accessToken)) {
+        signInPage(req, res, 401);
         return;
       }
-      res.cookie(ANALYST_COOKIE, requested, {
-        httpOnly: true,
-        sameSite: 'lax',
-        path: '/',
-        maxAge: 30 * 24 * 60 * 60 * 1000,
-      });
-      if (req.get('HX-Request') === 'true') {
-        res.setHeader('HX-Refresh', 'true');
-        res.status(204).end();
-        return;
-      }
-      res.redirect(303, safeReturnTo(body.returnTo));
+      await api.me(accessToken);
+      res.cookie(AUTH_COOKIE, accessToken, { ...cookieOptions, maxAge: 8 * 60 * 60 * 1000 });
+      redirectPage(req, res, '/');
     } catch (err) {
       next(err);
     }
+  });
+
+  app.post('/sign-out', (req, res) => {
+    clearCredential(res);
+    redirectPage(req, res, '/sign-in');
   });
 
   app.get('/', async (req, res, next) => {
@@ -177,24 +214,27 @@ export function createApp({ api, publicDir }: AppOptions) {
       const ctx = await context(req);
       const filters = parseFilters(req.query as Record<string, unknown>);
       if (ctx.isHx) {
-        const result = await api.listCases(filters, ctx.analystId);
+        const result = await api.listCases(filters, ctx.accessToken);
         res.setHeader('HX-Push-Url', queueUrl(filters));
         res.type('html').send(fragment(QueueResults({ filters, result, analysts: ctx.analysts })));
         return;
       }
       const [stats, result] = await Promise.all([
-        api.stats(ctx.analystId), api.listCases(filters, ctx.analystId),
+        api.stats(ctx.accessToken), api.listCases(filters, ctx.accessToken),
       ]);
-      page(res, ctx, req, 'Case queue', QueuePage({ filters, stats, result, analysts: ctx.analysts }));
+      page(res, ctx, 'Case queue', QueuePage({ filters, stats, result, analysts: ctx.analysts }));
     } catch (err) {
       next(err);
     }
   });
 
-  async function loadCaseView(id: string, analystId: string) {
+  async function loadCaseView(id: string, accessToken: string) {
     const [kase, explanation] = await Promise.all([
-      api.getCase(id, analystId),
-      api.riskExplanation(id, analystId).catch(() => null),
+      api.getCase(id, accessToken),
+      api.riskExplanation(id, accessToken).catch((err: unknown) => {
+        if (err instanceof ApiError && err.status === 401) throw err;
+        return null;
+      }),
     ]);
     return { kase, explanation, chain: verifyChain(kase.audit) };
   }
@@ -207,18 +247,21 @@ export function createApp({ api, publicDir }: AppOptions) {
     const id = req.params.id;
     try {
       const ctx = await context(req);
-      const view = await loadCaseView(id, ctx.analystId);
+      const view = await loadCaseView(id, ctx.accessToken);
       const done = typeof req.query.done === 'string' && isCaseAction(req.query.done) ? req.query.done : null;
-      page(res, ctx, req, caseTitle(view.kase), CaseMain({ ...view, analysts: ctx.analysts }), {
+      page(res, ctx, caseTitle(view.kase), CaseMain({ ...view, analysts: ctx.analysts }), {
         toast: done ? DONE_MESSAGES[done] : undefined,
       });
     } catch (err) {
       if (err instanceof ApiError && err.status === 404) {
-        const ctx = await context(req).catch(() => null);
+        const ctx = await context(req).catch((contextError: unknown) => {
+          next(contextError);
+          return null;
+        });
         if (ctx) {
-          page(res, ctx, req, 'Case not found', NotFoundCase({ id }), { status: 404 });
-          return;
+          page(res, ctx, 'Case not found', NotFoundCase({ id }), { status: 404 });
         }
+        return;
       }
       next(err);
     }
@@ -233,16 +276,16 @@ export function createApp({ api, publicDir }: AppOptions) {
         return;
       }
       if (ctx.isHx) {
-        const kase = await api.getCase(id, ctx.analystId);
+        const kase = await api.getCase(id, ctx.accessToken);
         res.type('html').send(fragment(ActionDialog({ kase, action, note: '', error: null })));
         return;
       }
-      const view = await loadCaseView(id, ctx.analystId);
+      const view = await loadCaseView(id, ctx.accessToken);
       const body = [
         CaseMain({ ...view, analysts: ctx.analysts }),
         ActionDialog({ kase: view.kase, action, note: '', error: null }),
       ];
-      page(res, ctx, req, `${ACTION_LABELS[action]} ${view.kase.reference}`, createFragmentList(body));
+      page(res, ctx, `${ACTION_LABELS[action]} ${view.kase.reference}`, createFragmentList(body));
     } catch (err) {
       next(err);
     }
@@ -258,7 +301,7 @@ export function createApp({ api, publicDir }: AppOptions) {
       }
       const body = req.body as Record<string, unknown>;
       const rawNote = typeof body.note === 'string' ? body.note : '';
-      const kase = await api.getCase(id, ctx.analystId);
+      const kase = await api.getCase(id, ctx.accessToken);
 
       const respondError = (message: string, status: number) => {
         const dialog = ActionDialog({ kase, action, note: rawNote, error: message });
@@ -268,12 +311,11 @@ export function createApp({ api, publicDir }: AppOptions) {
           res.type('html').send(fragment(dialog));
           return;
         }
-        void loadCaseView(id, ctx.analystId)
+        void loadCaseView(id, ctx.accessToken)
           .then((view) =>
             page(
               res,
               ctx,
-              req,
               `${ACTION_LABELS[action]} ${kase.reference}`,
               createFragmentList([CaseMain({ ...view, analysts: ctx.analysts }), dialog]),
               { status },
@@ -282,16 +324,16 @@ export function createApp({ api, publicDir }: AppOptions) {
           .catch(next);
       };
 
-      const clientError = validateNote(action, kase.riskLevel, rawNote);
+      const clientError = validateNote(action, kase.riskLevel, rawNote, kase.approvalNoteRequired);
       if (clientError) {
         respondError(clientError, 400);
         return;
       }
 
       try {
-        await api.performAction(id, ctx.analystId, action, normaliseNote(rawNote));
+        await api.performAction(id, ctx.accessToken, action, normaliseNote(rawNote));
       } catch (err) {
-        if (err instanceof ApiError && [400, 401, 403, 409].includes(err.status)) {
+        if (err instanceof ApiError && [400, 403, 409].includes(err.status)) {
           respondError(err.message, err.status);
           return;
         }
@@ -299,7 +341,7 @@ export function createApp({ api, publicDir }: AppOptions) {
       }
 
       if (ctx.isHx) {
-        const view = await loadCaseView(id, ctx.analystId);
+        const view = await loadCaseView(id, ctx.accessToken);
         res.type('html').send(
           fragment(
             createFragmentList([
@@ -323,7 +365,7 @@ export function createApp({ api, publicDir }: AppOptions) {
   app.use(async (req, res, next) => {
     try {
       const ctx = await context(req);
-      page(res, ctx, req, 'Not found', ErrorPanel({ heading: 'Page not found', message: `No page at ${req.path}.` }), {
+      page(res, ctx, 'Not found', ErrorPanel({ heading: 'Page not found', message: 'This page does not exist.' }), {
         status: 404,
       });
     } catch (err) {
@@ -332,22 +374,20 @@ export function createApp({ api, publicDir }: AppOptions) {
   });
 
   app.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
+    if (err instanceof ApiError && err.status === 401) {
+      clearCredential(res);
+      signInPage(req, res, 401);
+      return;
+    }
     const unreachable = err instanceof ApiUnreachableError;
     const status = unreachable ? 502 : err instanceof ApiError ? err.status : 500;
     const heading = unreachable ? 'The KYC API is unreachable' : 'Something went wrong';
     const message = unreachable
       ? 'The web console could not reach the case API. Check that the backend is running on port 4000 and try again.'
-      : err instanceof Error
-        ? err.message
-        : 'Unexpected error.';
-    if (!unreachable) console.error(err);
-    const analysts = lastAnalysts ?? [{ id: DEFAULT_ANALYST_ID, name: 'Default analyst', role: 'analyst' }];
-    const ctx: RequestContext = {
-      analysts,
-      analystId: parseCookies(req.headers.cookie)[ANALYST_COOKIE] ?? DEFAULT_ANALYST_ID,
-      isHx: false,
-    };
-    page(res, ctx, req, heading, ErrorPanel({ heading, message }), { status });
+      : 'The request could not be completed. Please try again.';
+    res.status(status).type('html').send(html(Layout({
+      title: heading, currentAnalyst: null, children: ErrorPanel({ heading, message }),
+    })));
   });
 
   return app;

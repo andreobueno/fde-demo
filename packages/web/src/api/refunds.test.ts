@@ -1,14 +1,25 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getRefund, getRefundAudit, getRefundStats, listRefunds, postRefundAction } from './refunds';
 import { DEFAULT_REFUND_FILTERS } from '../lib/refundFilters';
+import { authenticateAccessToken } from './client';
+import { clearIdentity } from './identity';
 
 const fetchMock = vi.fn<typeof fetch>();
 
-beforeEach(() => {
+const token = 'r'.repeat(43);
+
+async function signIn(id: string) {
+  fetchMock.mockResolvedValueOnce(Response.json({ id, name: id, role: 'analyst', permissions: [] }));
+  await authenticateAccessToken(token);
+  fetchMock.mockClear();
+}
+
+beforeEach(async () => {
   fetchMock.mockReset().mockImplementation(async () => Response.json({}));
   vi.stubGlobal('fetch', fetchMock);
+  await signIn('ana-001');
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => { clearIdentity(); vi.unstubAllGlobals(); });
 
 const endpoints = [
   { path: '/api/refunds?page=1&pageSize=25', call: (id: string, signal: AbortSignal) => listRefunds(DEFAULT_REFUND_FILTERS, id, signal) },
@@ -21,11 +32,12 @@ const endpoints = [
 describe('refund API identity and authorization contract', () => {
   it.each(endpoints)('$path sends the selected identity and cancellation signal', async ({ path, call }) => {
     for (const id of ['ana-003', 'ana-001', 'ana-006']) {
+      await signIn(id);
       const controller = new AbortController();
       await call(id, controller.signal);
       expect(fetchMock).toHaveBeenLastCalledWith(path, expect.objectContaining({
-        headers: { 'content-type': 'application/json', 'x-analyst-id': id },
-        signal: controller.signal,
+        headers: { 'content-type': 'application/json', Authorization: `Bearer ${token}`, 'x-analyst-id': id },
+        signal: expect.any(AbortSignal),
       }));
     }
   });

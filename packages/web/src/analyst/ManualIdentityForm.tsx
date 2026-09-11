@@ -1,87 +1,66 @@
 import { useEffect, useRef, useState } from 'react';
-import { ApiError, getMe } from '../api/client';
+import { ApiError, authenticateAccessToken } from '../api/client';
 
-interface ManualIdentityFormProps {
-  identitySignal: AbortSignal;
-  onSelect: (id: string) => void;
-}
-
-export async function selectKnownAnalyst(
-  input: string,
-  signal: AbortSignal,
-  onSelect: (id: string) => void,
-): Promise<void> {
-  const id = input.trim();
-  if (!id) {
-    throw new Error('Enter a known demo identity ID.');
-  }
-  const analyst = await getMe(id, signal);
-  signal.throwIfAborted();
-  onSelect(analyst.id);
-}
-
-export function ManualIdentityForm({ identitySignal, onSelect }: ManualIdentityFormProps) {
-  const [id, setId] = useState('');
+export function ManualIdentityForm() {
+  const [token, setToken] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const request = useRef<AbortController | null>(null);
 
-  useEffect(() => {
-    const abort = () => request.current?.abort();
-    identitySignal.addEventListener('abort', abort);
-    return () => {
-      identitySignal.removeEventListener('abort', abort);
-      abort();
-    };
-  }, [identitySignal]);
+  useEffect(() => () => request.current?.abort(), []);
 
   const submit = async () => {
-    if (identitySignal.aborted || request.current) return;
+    if (request.current) return;
     const controller = new AbortController();
     request.current = controller;
     setSubmitting(true);
     setError(null);
     try {
-      await selectKnownAnalyst(id, controller.signal, onSelect);
+      await authenticateAccessToken(token, controller.signal);
     } catch (err) {
       if (!controller.signal.aborted) {
         setError(err instanceof ApiError && err.status === 401
-          ? 'Unknown demo identity. Ask an administrator for a valid ID.'
+          ? 'Invalid or expired access token. Ask an administrator for a new token.'
           : err instanceof Error ? err.message : 'Unexpected error. Please try again.');
       }
     } finally {
       request.current = null;
-      if (!controller.signal.aborted) setSubmitting(false);
+      if (!controller.signal.aborted) {
+        setToken('');
+        setSubmitting(false);
+      }
     }
   };
 
   return (
-    <details>
-      <summary>Enter a known demo identity</summary>
+    <section style={{ maxWidth: 640, margin: '48px auto', padding: 24 }} aria-labelledby="sign-in-title">
+      <h1 id="sign-in-title">Sign in to Operations</h1>
       <form onSubmit={(event) => { event.preventDefault(); void submit(); }} style={{ marginTop: 8 }}>
-        <p>Use an existing identity ID provided by your administrator.</p>
+        <p>Enter the access token provided by your administrator. Your role is verified by the server.</p>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <label htmlFor="manual-analyst-id">Demo identity ID</label>
+          <label htmlFor="access-token">Access token</label>
           <input
-            id="manual-analyst-id"
-            type="text"
-            value={id}
-            onChange={(event) => { setId(event.target.value); setError(null); }}
+            id="access-token"
+            type="password"
+            value={token}
+            onChange={(event) => { setToken(event.target.value); setError(null); }}
             autoComplete="off"
             spellCheck={false}
             disabled={submitting}
+            maxLength={128}
             required
             aria-invalid={error !== null}
             aria-describedby={error ? 'manual-analyst-error' : undefined}
           />
           <button type="submit" disabled={submitting}>
-            {submitting ? 'Checking…' : 'Use identity'}
+            {submitting ? 'Signing in…' : 'Sign in'}
           </button>
         </div>
         {error ? (
           <p id="manual-analyst-error" role="alert" style={{ color: 'var(--color-danger)' }}>{error}</p>
         ) : null}
       </form>
-    </details>
+      <p>Credentials stay in memory. Refreshing the page or switching users requires signing in again.</p>
+    </section>
   );
 }

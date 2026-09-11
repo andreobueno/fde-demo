@@ -3,6 +3,7 @@ import request from 'supertest';
 import { openDb, type Db } from '../db.js';
 import type { AuditEvent, CaseAction, CaseStatus, RiskLevel } from '../types.js';
 import { createApp } from './app.js';
+import { provisionAuthFixtures } from './authFixtures.js';
 
 const ACTORS = {
   analyst: { id: 'auth-analyst', name: 'Robin Fiction', role: 'analyst' },
@@ -74,6 +75,7 @@ interface PolicyEvent {
 
 let db: Db;
 let app: ReturnType<typeof createApp>;
+let auth: ReturnType<typeof provisionAuthFixtures>;
 let nextCase: number;
 
 function addCase(status: CaseStatus = 'pending', risk: RiskLevel = 'low'): string {
@@ -99,18 +101,18 @@ function expectedActions(role: Role, risk: RiskLevel, status: CaseStatus): CaseA
 }
 
 function act(id: string, role: Role, body: object) {
-  return request(app).post(`/api/cases/${id}/actions`).set('x-analyst-id', ACTORS[role].id).send(body);
+  return request(app).post(`/api/cases/${id}/actions`).set(auth(ACTORS[role].id)).send(body);
 }
 
 async function readCase(id: string): Promise<CaseView> {
   const res = await request(app).get(`/api/cases/${id}`)
-    .set('x-analyst-id', ACTORS.senior_analyst.id).expect(200);
+    .set(auth(ACTORS.senior_analyst.id)).expect(200);
   return res.body as CaseView;
 }
 
 async function readAudit(id: string): Promise<AuditEvent[]> {
   const res = await request(app).get(`/api/cases/${id}/audit`)
-    .set('x-analyst-id', ACTORS.senior_analyst.id).expect(200);
+    .set(auth(ACTORS.senior_analyst.id)).expect(200);
   return res.body as AuditEvent[];
 }
 
@@ -120,18 +122,18 @@ async function expectCaseUnchanged(id: string, before: CaseView): Promise<void> 
 }
 
 async function readPolicy(role: Role = 'senior_analyst'): Promise<Policy> {
-  const res = await request(app).get('/api/policy').set('x-analyst-id', ACTORS[role].id).expect(200);
+  const res = await request(app).get('/api/policy').set(auth(ACTORS[role].id)).expect(200);
   return res.body as Policy;
 }
 
 async function readPolicyAudit(): Promise<PolicyEvent[]> {
   const res = await request(app).get('/api/policy/audit')
-    .set('x-analyst-id', ACTORS.senior_analyst.id).expect(200);
+    .set(auth(ACTORS.senior_analyst.id)).expect(200);
   return res.body as PolicyEvent[];
 }
 
 function updatePolicy(body: object, role: Role = 'compliance_manager') {
-  return request(app).put('/api/policy').set('x-analyst-id', ACTORS[role].id).send(body);
+  return request(app).put('/api/policy').set(auth(ACTORS[role].id)).send(body);
 }
 
 async function setNotePolicy(requireApprovalNote: boolean): Promise<void> {
@@ -152,7 +154,8 @@ beforeEach(() => {
       actor.id, actor.name, actor.role,
     );
   }
-  app = createApp(db, { trustAnalystHeader: true });
+  auth = provisionAuthFixtures(db);
+  app = createApp(db);
   nextCase = 0;
 });
 
@@ -205,10 +208,10 @@ describe('identity at every sensitive HTTP endpoint', () => {
     addCase();
     for (const [method, path] of endpoints) {
       if (method === 'get') {
-        await request(app).get(path).set('x-analyst-id', ACTORS[role].id).expect(200);
+        await request(app).get(path).set(auth(ACTORS[role].id)).expect(200);
       }
     }
-    const me = await request(app).get('/api/me').set('x-analyst-id', ACTORS[role].id).expect(200);
+    const me = await request(app).get('/api/me').set(auth(ACTORS[role].id)).expect(200);
     expect(me.body).toEqual({ ...ACTORS[role], permissions: EXPECTED_PERMISSIONS[role] });
   });
 
@@ -217,13 +220,13 @@ describe('identity at every sensitive HTTP endpoint', () => {
     for (const role of ['analyst', 'senior_analyst', 'compliance_manager', 'analyst'] as const) {
       db.prepare('UPDATE analysts SET role = ?, name = ? WHERE id = ?')
         .run(role, `Fictional ${role}`, identity);
-      const me = await request(app).get('/api/me').set('x-analyst-id', identity).expect(200);
+      const me = await request(app).get('/api/me').set(auth(identity)).expect(200);
       expect(me.body).toEqual({
         id: identity, name: `Fictional ${role}`, role, permissions: EXPECTED_PERMISSIONS[role],
       });
       for (const risk of ['low', 'high'] as const) {
         const id = addCase('pending', risk);
-        const detail = await request(app).get(`/api/cases/${id}`).set('x-analyst-id', identity).expect(200);
+        const detail = await request(app).get(`/api/cases/${id}`).set(auth(identity)).expect(200);
         expect(detail.body.allowedActions.sort()).toEqual(expectedActions(role, risk, 'pending'));
         const before = await readCase(id);
         const res = await act(id, 'analyst', { action: 'approve', note: NOTE })
@@ -246,7 +249,7 @@ describe.each(ROLES)('%s case authorization', (role) => {
       it('advertises exactly the allowed actions', async () => {
         const id = addCase(status, risk);
         const res = await request(app).get(`/api/cases/${id}`)
-          .set('x-analyst-id', ACTORS[role].id).expect(200);
+          .set(auth(ACTORS[role].id)).expect(200);
         expect(res.body.allowedActions.sort()).toEqual(expectedActions(role, risk, status));
       });
 
@@ -360,7 +363,7 @@ describe('strict action bodies and append-only case audit', () => {
       '/api/audit', `/api/audit/${eventId}`,
     ]) {
       for (const method of ['post', 'put', 'patch', 'delete'] as const) {
-        const res = await request(app)[method](path).set('x-analyst-id', ACTORS[role].id)
+        const res = await request(app)[method](path).set(auth(ACTORS[role].id))
           .send({ action: 'approve', note: 'Forged audit entry', toStatus: 'approved' });
         expect([404, 405]).toContain(res.status);
         await expectCaseUnchanged(id, before);
@@ -495,7 +498,7 @@ describe('versioned manager-only policy updates', () => {
     const audit = await readPolicyAudit();
     for (const path of ['/api/policy/audit', `/api/policy/audit/${audit[0]!.id}`]) {
       for (const method of ['post', 'put', 'patch', 'delete'] as const) {
-        const res = await request(app)[method](path).set('x-analyst-id', ACTORS[role].id)
+        const res = await request(app)[method](path).set(auth(ACTORS[role].id))
           .send({ ...audit[0], reason: 'Forged policy history' });
         expect([404, 405]).toContain(res.status);
         expect(await readPolicy()).toEqual(before);
@@ -569,7 +572,7 @@ describe.each([true, false])('requireApprovalNote = %s', (required) => {
       const id = addCase(status, risk);
       const before = await readCase(id);
       const detail = await request(app).get(`/api/cases/${id}`)
-        .set('x-analyst-id', ACTORS[role].id).expect(200);
+        .set(auth(ACTORS[role].id)).expect(200);
       expect(detail.body.allowedActions.sort()).toEqual(expectedActions(role, risk, status));
       await act(id, role, { action, note: NOTE }).expect(403);
       await expectCaseUnchanged(id, before);

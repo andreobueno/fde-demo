@@ -18,7 +18,7 @@ identity, auditing, interaction components and verification tooling.
 
 | Capability | Existing code reused or extended |
 | --- | --- |
-| Shell/navigation | `packages/web/src/App.tsx`: two routes and a Refunds entry; same identity selector and router |
+| Shell/navigation | `packages/web/src/App.tsx`: two routes and a Refunds entry; same authenticated identity and router |
 | Request identity | `AnalystProvider`, API request helper and `useApi`: selected ID, cancellation, loading, errors and reload |
 | Table/filter patterns | KYC's embedded table, search and pagination extracted to `DataTable`, `SearchInput`, `FilterChips`, `Pagination`; both queues now consume them |
 | Detail interactions | Existing `ActionDialog` accepts a subject label; same validation, submission and error behavior |
@@ -109,7 +109,7 @@ These are automated domain, HTTP and rendering checks; they are not a browser in
    remain explicit, rather than introducing a generic form/workflow builder.
 3. **The role model is organization-wide.** Everyone can read both tools. A portfolio needs
    application membership, queue/tenant/field scopes and controlled grants, not simply more broad
-   manager powers. The demo identity header still permits impersonation; SSO is required for real use.
+   manager powers. Both tools now share token authentication; managed SSO and provisioning remain production work.
 4. **Policy is still domain-specific.** The existing policy editor configures KYC note requirements.
    Refund amount/risk limits are prototype constants. A real operation needs versioned refund
    policy and evidence of which policy authorized each decision.

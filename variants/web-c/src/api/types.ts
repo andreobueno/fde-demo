@@ -22,6 +22,10 @@ export interface Analyst {
   role: AnalystRole;
 }
 
+export interface AuthenticatedAnalyst extends Analyst {
+  permissions: string[];
+}
+
 export interface Customer {
   id: string;
   fullName: string;
@@ -115,11 +119,13 @@ export interface CaseDetail extends KycCase {
   signals: RiskSignal[];
   audit: AuditEvent[];
   allowedActions: CaseAction[];
+  approvalNoteRequired: boolean;
 }
 
 export interface ActionResponse extends KycCase {
   audit: AuditEvent[];
   allowedActions: CaseAction[];
+  approvalNoteRequired: boolean;
 }
 
 export interface ApiErrorBody {

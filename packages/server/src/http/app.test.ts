@@ -2,15 +2,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import { openDb, type Db } from '../db.js';
 import { createApp } from './app.js';
+import { provisionAuthFixtures } from './authFixtures.js';
 import { computeEventHash, GENESIS_HASH, verifyChain } from '../domain/audit.js';
 import { computeRisk } from '../domain/risk.js';
 import type { CaseStatus, Customer, KycCase, RiskExplanation, RiskSignal } from '../types.js';
 
 let db: Db;
 let app: ReturnType<typeof createApp>;
+let auth: ReturnType<typeof provisionAuthFixtures>;
 
 function authenticated() {
-  return request.agent(app).set('x-analyst-id', 'ana-003');
+  return request.agent(app).set(auth('ana-003'));
 }
 
 function addCase(id: string, opts: {
@@ -59,7 +61,8 @@ beforeEach(() => {
   addCase('c-1', { status: 'pending', riskLevel: 'high', riskScore: 70, fullName: 'Alice High', email: 'alice@x.com', reference: 'KYC-0001' });
   addCase('c-2', { status: 'in_review', riskLevel: 'medium', riskScore: 40, fullName: 'Bob Mid', email: 'bob@x.com', reference: 'KYC-0002' });
   addCase('c-3', { status: 'approved', riskLevel: 'low', riskScore: 5, fullName: 'Cara Low', email: 'cara@y.com', reference: 'KYC-0003' });
-  app = createApp(db, { trustAnalystHeader: true });
+  auth = provisionAuthFixtures(db);
+  app = createApp(db);
 });
 
 afterEach(() => {
@@ -236,7 +239,7 @@ describe('HTTP API', () => {
     expect(res.body[0].sequence).toBe(1);
   });
 
-  it('POST /api/cases/:id/actions without x-analyst-id → 401', async () => {
+  it('POST /api/cases/:id/actions without credentials → 401', async () => {
     const res = await request(app).post('/api/cases/c-1/actions').send({ action: 'approve' });
     expect(res.status).toBe(401);
     expect(res.body.error.code).toBe('UNAUTHORIZED');
@@ -253,7 +256,7 @@ describe('HTTP API', () => {
   it('POST approve returns updated case with audit + allowedActions', async () => {
     const res = await request(app)
       .post('/api/cases/c-1/actions')
-      .set('x-analyst-id', 'ana-006')
+      .set(auth('ana-006'))
       .send({ action: 'approve', note: 'high risk approval with justification' });
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('approved');
@@ -267,7 +270,7 @@ describe('HTTP API', () => {
   it('POST reject without note → 400 VALIDATION_ERROR', async () => {
     const res = await request(app)
       .post('/api/cases/c-2/actions')
-      .set('x-analyst-id', 'ana-001')
+      .set(auth('ana-001'))
       .send({ action: 'reject' });
     expect(res.status).toBe(400);
     expect(res.body.error.code).toBe('VALIDATION_ERROR');
@@ -276,7 +279,7 @@ describe('HTTP API', () => {
   it('POST start_review on approved case → 409 INVALID_TRANSITION', async () => {
     const res = await request(app)
       .post('/api/cases/c-3/actions')
-      .set('x-analyst-id', 'ana-001')
+      .set(auth('ana-001'))
       .send({ action: 'start_review' });
     expect(res.status).toBe(409);
     expect(res.body.error.code).toBe('INVALID_TRANSITION');
@@ -285,12 +288,12 @@ describe('HTTP API', () => {
   it('POST invalid body → 400', async () => {
     const res = await request(app)
       .post('/api/cases/c-1/actions')
-      .set('x-analyst-id', 'ana-001')
+      .set(auth('ana-001'))
       .send({ action: 'bogus' });
     expect(res.status).toBe(400);
   });
 
-  it('GET /api/me uses the selected analyst without granting decision permissions', async () => {
+  it('GET /api/me uses the authenticated analyst without granting decision permissions', async () => {
     const res = await authenticated().get('/api/me');
     expect(res.status).toBe(200);
     expect(res.body.id).toBe('ana-003');
@@ -324,7 +327,7 @@ describe('Risk policy API', () => {
     expect(anon.status).toBe(401);
     const senior = await request(app)
       .put('/api/risk-policy')
-      .set('x-analyst-id', 'ana-001')
+      .set(auth('ana-001'))
       .send({ thresholds: { high: 70 } });
     expect(senior.status).toBe(403);
     expect(senior.body.error.code).toBe('FORBIDDEN');
@@ -333,18 +336,18 @@ describe('Risk policy API', () => {
   it('PUT /api/risk-policy rejects invalid thresholds and unknown rules', async () => {
     const inverted = await request(app)
       .put('/api/risk-policy')
-      .set('x-analyst-id', 'ana-006')
+      .set(auth('ana-006'))
       .send({ thresholds: { medium: 70, high: 60 } });
     expect(inverted.status).toBe(400);
     expect(inverted.body.error.code).toBe('VALIDATION_ERROR');
     const unknown = await request(app)
       .put('/api/risk-policy')
-      .set('x-analyst-id', 'ana-006')
+      .set(auth('ana-006'))
       .send({ weights: { BOGUS: 5 } });
     expect(unknown.status).toBe(400);
     const outOfRange = await request(app)
       .put('/api/risk-policy')
-      .set('x-analyst-id', 'ana-006')
+      .set(auth('ana-006'))
       .send({ weights: { PEP: 101 } });
     expect(outOfRange.status).toBe(400);
   });
@@ -355,7 +358,7 @@ describe('Risk policy API', () => {
 
     const res = await request(app)
       .put('/api/risk-policy')
-      .set('x-analyst-id', 'ana-006')
+      .set(auth('ana-006'))
       .send({ weights: { PEP: 65 }, thresholds: { high: 65 } });
     expect(res.status).toBe(200);
     expect(res.body.policy.version).toBe(1);
@@ -402,7 +405,7 @@ describe('Risk policy API', () => {
   it('PUT /api/risk-policy with no effective change is a no-op', async () => {
     const res = await request(app)
       .put('/api/risk-policy')
-      .set('x-analyst-id', 'ana-006')
+      .set(auth('ana-006'))
       .send({ weights: { PEP: 30 } });
     expect(res.status).toBe(200);
     expect(res.body.change).toBeNull();

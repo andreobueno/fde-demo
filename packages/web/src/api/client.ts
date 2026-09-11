@@ -19,6 +19,7 @@ import type {
 } from './types';
 import type { QueueFilters } from '../lib/queueFilters';
 import { queueFiltersToQuery } from '../lib/queueFilters';
+import { beginAuthentication, clearIdentity, completeAuthentication, credentialFor } from './identity';
 
 export class ApiError extends Error {
   status: number;
@@ -45,13 +46,45 @@ interface ApiRequestOptions {
 
 export async function apiRequest<T>(path: string, options: ApiRequestOptions): Promise<T> {
   options.signal?.throwIfAborted();
-  if (options.analystId.trim() === '') {
-    throw new ApiError(401, 'UNAUTHORIZED', 'Select a demo identity to continue.');
+  const credential = credentialFor(options.analystId);
+  if (!credential) {
+    throw new ApiError(401, 'UNAUTHORIZED', 'Sign in with your access token to continue.');
   }
+  const signal = AbortSignal.any([credential.signal, ...(options.signal ? [options.signal] : [])]);
+  try {
+    return await request<T>(path, credential.token, signal, options);
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 401 && !credential.signal.aborted) clearIdentity();
+    throw error;
+  }
+}
+
+export async function authenticateAccessToken(token: string, signal?: AbortSignal): Promise<CurrentAnalyst> {
+  signal?.throwIfAborted();
+  const trimmed = token.trim();
+  if (!/^[A-Za-z0-9_-]{43}$/.test(trimmed)) {
+    throw new ApiError(401, 'UNAUTHORIZED', 'Enter a valid access token provided by your administrator.');
+  }
+  const authentication = beginAuthentication();
+  const combined = AbortSignal.any([authentication, ...(signal ? [signal] : [])]);
+  const analyst = await request<CurrentAnalyst>('/api/me', trimmed, combined);
+  combined.throwIfAborted();
+  completeAuthentication(analyst, trimmed, authentication);
+  return analyst;
+}
+
+async function request<T>(
+  path: string,
+  token: string,
+  signal: AbortSignal,
+  options: Partial<ApiRequestOptions> = {},
+): Promise<T> {
+  signal.throwIfAborted();
   const method = options.method ?? 'GET';
   const headers: Record<string, string> = {
     'content-type': 'application/json',
-    'x-analyst-id': options.analystId,
+    Authorization: `Bearer ${token}`,
+    ...(options.analystId ? { 'x-analyst-id': options.analystId } : {}),
   };
 
   let response: Response;
@@ -60,7 +93,9 @@ export async function apiRequest<T>(path: string, options: ApiRequestOptions): P
       method,
       headers,
       body: options.body === undefined ? null : JSON.stringify(options.body),
-      signal: options.signal ?? null,
+      signal,
+      credentials: 'omit',
+      redirect: 'error',
     });
   } catch (err) {
     if (err instanceof DOMException && err.name === 'AbortError') {
@@ -69,6 +104,7 @@ export async function apiRequest<T>(path: string, options: ApiRequestOptions): P
     throw new ApiError(0, 'NETWORK_ERROR', 'Cannot reach the API server');
   }
 
+  signal.throwIfAborted();
   if (!response.ok) {
     let code = `HTTP_${response.status}`;
     let message = `Request failed (${response.status})`;
@@ -87,7 +123,7 @@ export async function apiRequest<T>(path: string, options: ApiRequestOptions): P
   }
 
   const result = (await response.json()) as T;
-  options.signal?.throwIfAborted();
+  signal.throwIfAborted();
   return result;
 }
 

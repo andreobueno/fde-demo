@@ -11,7 +11,7 @@ import { RefundQueuePage } from './pages/RefundQueuePage';
 import { RefundPage } from './pages/RefundPage';
 
 function Layout() {
-  const { analystId, setAnalystId, analysts, identitySignal } = useAnalyst();
+  const { analystId, analyst, signOut } = useAnalyst();
   const { pathname } = useLocation();
   return (
     <div>
@@ -34,11 +34,10 @@ function Layout() {
           <NavLink to="/policy">KYC policy</NavLink>
         </nav>
         <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-          <AnalystSelector analystId={analystId} analysts={analysts} onChange={setAnalystId} />
-          <ManualIdentityForm key={analystId} identitySignal={identitySignal} onSelect={setAnalystId} />
+          {analyst ? <AnalystSelector analyst={analyst} onSignOut={signOut} /> : null}
         </div>
       </header>
-      <Outlet key={`${analystId}:${pathname}`} />
+      {analyst ? <Outlet key={`${analystId}:${pathname}`} /> : <ManualIdentityForm />}
     </div>
   );
 }
