@@ -180,6 +180,23 @@ describe('explainRisk', () => {
     expect(e.factors.map((f) => f.contributionPct)).toEqual([60, 40]);
   });
 
+  it('contributionPct sums to 100 even when the score is clamped', () => {
+    const e = explainRisk(
+      'case-z',
+      baseCustomer({ sanctionsHit: true, pepFlag: true, idDocumentVerified: false, addressVerified: false }),
+      NOW,
+    );
+    expect(e.riskScore).toBe(100);
+    expect(e.factors.reduce((sum, f) => sum + f.contributionPct, 0)).toBe(100);
+  });
+
+  it('reports whole elapsed days for expired documents', () => {
+    const r = computeRisk(baseCustomer({ idDocumentExpiresAt: '2026-05-31T12:00:00Z' }), NOW);
+    expect(r.signals.find((s) => s.code === 'DOCUMENT_EXPIRING')?.description).toBe(
+      'ID document expired 0 day(s) ago.',
+    );
+  });
+
   it('contributionPct is 0 when score is 0', () => {
     const e = explainRisk('case-y', baseCustomer(), NOW);
     expect(e.riskScore).toBe(0);

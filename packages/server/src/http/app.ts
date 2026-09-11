@@ -8,7 +8,7 @@ import cors from 'cors';
 import { z } from 'zod';
 import type { Db } from '../db.js';
 import { ApiError, notFound, unauthorized } from '../errors.js';
-import { explainRisk } from '../domain/risk.js';
+import { explainAssessment } from '../domain/risk.js';
 import { policyPatchSchema } from '../domain/policy.js';
 import { getAllowedActions, actionBodySchema } from '../domain/transitions.js';
 import { getAnalyst, listAnalysts } from '../repo/analysts.js';
@@ -134,9 +134,15 @@ export function createApp(db: Db): Express {
     const caseId = String(req.params.id);
     const kase = getCase(db, caseId);
     if (!kase) return next(notFound(`Case '${caseId}' not found.`));
-    const customer = getCustomer(db, kase.customerId);
-    if (!customer) return next(notFound(`Customer '${kase.customerId}' not found.`));
-    res.json(explainRisk(kase.id, customer, new Date(), loadPolicy(db)));
+    res.json(
+      explainAssessment(
+        kase.id,
+        kase.riskScore,
+        kase.riskLevel,
+        listSignals(db, kase.id),
+        loadPolicy(db).thresholds,
+      ),
+    );
   });
 
   app.get('/api/policy', (_req, res) => {

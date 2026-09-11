@@ -52,7 +52,7 @@ interface RiskExplanation {
   - `page` ≥1 default 1, `pageSize` 1..100 default 25
   - → `{ items: KycCase[]; total: number; page: number; pageSize: number }`
 - `GET /api/cases/:id` → `KycCase & { customer: Customer; signals: RiskSignal[]; audit: AuditEvent[]; allowedActions: CaseAction[] }`
-- `GET /api/cases/:id/risk-explanation` → `RiskExplanation`
+- `GET /api/cases/:id/risk-explanation` → `RiskExplanation` (built from the persisted score/signals — for closed cases this is the assessment the decision was made under, not a re-score under the current policy; `contributionPct` is relative to the unclamped sum of weights, so it totals 100)
 - `GET /api/cases/:id/audit` → `AuditEvent[]` (ascending by sequence)
 - `POST /api/cases/:id/actions` body `{ action: CaseAction; note?: string }` header `x-analyst-id` required
   - transitions: `pending → in_review` (start_review); `pending|in_review → approved|rejected|escalated`; `escalated → approved|rejected` (only `senior_analyst`)
