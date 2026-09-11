@@ -4,7 +4,7 @@ import { getAnalysts } from '../api/client';
 import type { Analyst } from '../api/types';
 
 const STORAGE_KEY = 'kyc.analystId';
-const DEFAULT_ANALYST_ID = 'ana-003';
+export const DEFAULT_ANALYST_ID = 'ana-003';
 
 interface AnalystContextValue {
   analystId: string;
@@ -40,9 +40,7 @@ export function AnalystProvider({ children }: { children: ReactNode }) {
           setAnalysts(list);
         }
       })
-      .catch(() => {
-        // analyst list is non-critical; select still works with stored id
-      });
+      .catch(() => undefined);
     return () => {
       controller.abort();
     };
