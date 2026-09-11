@@ -29,7 +29,7 @@ const ACTION_BUTTON_CLASS: Record<CaseAction, string> = {
 
 export function CasePage() {
   const { id } = useParams<{ id: string }>();
-  const { analystId } = useAnalyst();
+  const { analystId, analysts } = useAnalyst();
   const [openAction, setOpenAction] = useState<CaseAction | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
@@ -92,7 +92,11 @@ export function CasePage() {
         <Badge kind="risk" value={kase.riskLevel} />
         <span>Score {kase.riskScore}</span>
         <div className={styles.headerMeta}>
-          Assigned to {kase.assignedTo ?? '—'} · Created {formatDateTime(kase.createdAt)} ·
+          Assigned to{' '}
+          {kase.assignedTo
+            ? analysts.find((a) => a.id === kase.assignedTo)?.name ?? kase.assignedTo
+            : '—'}{' '}
+          · Created {formatDateTime(kase.createdAt)} ·
           Updated {formatDateTime(kase.updatedAt)}
         </div>
       </div>
