@@ -1,0 +1,276 @@
+import request from 'supertest';
+import { describe, expect, it } from 'vitest';
+import { createApiClient } from '../src/api/client.js';
+import type { FetchLike } from '../src/api/client.js';
+import type { Analyst, AuditEvent, CaseDetail, CaseStats, KycCase, RiskExplanation } from '../src/api/types.js';
+import { createApp } from '../src/app.js';
+import fixture from './fixtures-audit.json' with { type: 'json' };
+
+const analysts: Analyst[] = [
+  { id: 'ana-001', name: 'Marta Ellison', role: 'senior_analyst' },
+  { id: 'ana-003', name: 'Grete Lindholm', role: 'analyst' },
+];
+
+const audit = fixture as AuditEvent[];
+
+const kase: KycCase = {
+  id: 'case-006',
+  reference: 'KYC-2026-0006',
+  customerId: 'cus-006',
+  status: 'in_review',
+  riskLevel: 'high',
+  riskScore: 65,
+  assignedTo: 'ana-003',
+  createdAt: '2026-09-04T14:17:25.258Z',
+  updatedAt: '2026-09-13T14:17:25.258Z',
+  customer: { id: 'cus-006', fullName: 'Priya Holloway', countryOfResidence: 'MM', nationality: 'MM' },
+};
+
+const detail: CaseDetail = {
+  ...kase,
+  customer: {
+    id: 'cus-006',
+    fullName: 'Priya Holloway',
+    dateOfBirth: '1984-02-11',
+    nationality: 'MM',
+    countryOfResidence: 'MM',
+    occupation: 'jeweller',
+    email: 'priya@example.test',
+    accountOpenedAt: '2026-08-20T00:00:00.000Z',
+    expectedMonthlyVolumeUsd: 72000,
+    sourceOfFunds: 'crypto',
+    idDocumentType: 'passport',
+    idDocumentVerified: true,
+    addressVerified: false,
+    pepFlag: false,
+    sanctionsHit: false,
+    adverseMediaHits: 1,
+  },
+  signals: [
+    {
+      id: 'sig-1',
+      caseId: 'case-006',
+      code: 'HIGH_RISK_JURISDICTION',
+      title: 'High-risk jurisdiction',
+      description: 'Residence in a high-risk jurisdiction.',
+      severity: 'high',
+      weight: 25,
+    },
+  ],
+  audit,
+  allowedActions: ['approve', 'reject', 'escalate'],
+};
+
+const explanation: RiskExplanation = {
+  caseId: 'case-006',
+  riskScore: 65,
+  riskLevel: 'high',
+  summary: 'Score 65 is above the high threshold (60).',
+  thresholds: { medium: 30, high: 60 },
+  factors: [
+    { code: 'A', title: 'Small factor', description: 'd', severity: 'low', weight: 5, contributionPct: 8 },
+    { code: 'B', title: 'Big factor', description: 'd', severity: 'high', weight: 60, contributionPct: 92 },
+  ],
+};
+
+const stats: CaseStats = {
+  byStatus: { pending: 1, in_review: 2, approved: 3, rejected: 4, escalated: 5 },
+  byRiskLevel: { low: 1, medium: 2, high: 3 },
+  total: 15,
+};
+
+interface Call {
+  url: string;
+  init: RequestInit | undefined;
+}
+
+function json(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+}
+
+interface StubOptions {
+  action?: (call: Call) => Response;
+  unreachable?: boolean;
+}
+
+function buildApp(opts: StubOptions = {}) {
+  const calls: Call[] = [];
+  const fetchStub: FetchLike = async (url, init) => {
+    calls.push({ url, init });
+    if (opts.unreachable) throw new TypeError('fetch failed');
+    const { pathname } = new URL(url);
+    if (pathname === '/api/analysts') return json(analysts);
+    if (pathname === '/api/cases/stats') return json(stats);
+    if (pathname === '/api/cases') return json({ items: [kase], total: 1, page: 1, pageSize: 25 });
+    if (pathname === '/api/cases/case-006') return json(detail);
+    if (pathname === '/api/cases/case-006/risk-explanation') return json(explanation);
+    if (pathname === '/api/cases/case-006/actions' && init?.method === 'POST') {
+      return opts.action ? opts.action({ url, init }) : json({ ...kase, status: 'approved', audit, allowedActions: [] });
+    }
+    return json({ error: { code: 'NOT_FOUND', message: 'Case not found' } }, 404);
+  };
+  const app = createApp({ api: createApiClient('http://api.test', fetchStub) });
+  return { app, calls };
+}
+
+describe('GET /', () => {
+  it('renders queue rows, stats and filter state from the API', async () => {
+    const { app, calls } = buildApp();
+    const res = await request(app).get('/?riskLevel=high&status=in_review&q=priya');
+    expect(res.status).toBe(200);
+    expect(res.headers['content-security-policy']).toContain("script-src 'self'");
+    expect(res.text).toContain('<!doctype html>');
+    expect(res.text).toContain('KYC-2026-0006');
+    expect(res.text).toContain('Priya Holloway');
+    expect(res.text).toContain('badge-risk-high');
+    expect(res.text).toContain('Showing 1–1 of 1 cases');
+    expect(res.text).toContain('<input type="checkbox" name="riskLevel" checked="" value="high"/>');
+    expect(res.text).toMatch(/name="q"[^>]*value="priya"/);
+    const listCall = calls.find((c) => c.url.includes('/api/cases?'));
+    expect(listCall?.url).toContain('status=in_review&riskLevel=high&q=priya');
+    expect(listCall?.url).toContain('pageSize=25');
+  });
+
+  it('returns only the table fragment plus a canonical push URL for htmx requests', async () => {
+    const { app, calls } = buildApp();
+    const res = await request(app).get('/?q=&status=pending&sort=createdAt&order=desc').set('HX-Request', 'true');
+    expect(res.status).toBe(200);
+    expect(res.headers['hx-push-url']).toBe('/?status=pending');
+    expect(res.text.startsWith('<section id="queue-results"')).toBe(true);
+    expect(res.text).not.toContain('<html');
+    expect(calls.some((c) => c.url.endsWith('/api/cases/stats'))).toBe(false);
+  });
+
+  it('shows a friendly error page when the API is unreachable', async () => {
+    const { app } = buildApp({ unreachable: true });
+    const res = await request(app).get('/');
+    expect(res.status).toBe(502);
+    expect(res.text).toContain('The KYC API is unreachable');
+  });
+});
+
+describe('GET /cases/:id', () => {
+  it('renders the case, formatted customer fields, sorted factors and a verified chain', async () => {
+    const { app } = buildApp();
+    const res = await request(app).get('/cases/case-006');
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('Why is this case high risk?');
+    expect(res.text).toContain('$72,000');
+    expect(res.text).toContain('✓ Yes');
+    expect(res.text).toContain('✕ No');
+    expect(res.text.indexOf('Big factor')).toBeLessThan(res.text.indexOf('Small factor'));
+    expect(res.text).toContain('Chain verified (2 events)');
+    expect(res.text).toContain(`title="${audit[1]!.hash}"`);
+    expect(res.text).toContain(audit[1]!.hash.slice(0, 12));
+    for (const action of ['Approve', 'Reject', 'Escalate']) expect(res.text).toContain(`>${action}</a>`);
+    expect(res.text).not.toContain('Start review');
+  });
+
+  it('returns a 404 page for an unknown case', async () => {
+    const { app } = buildApp();
+    const res = await request(app).get('/cases/nope');
+    expect(res.status).toBe(404);
+    expect(res.text).toContain('Case not found');
+  });
+
+  it('serves the action dialog as a fragment for htmx and inline for full page loads', async () => {
+    const { app } = buildApp();
+    const frag = await request(app).get('/cases/case-006/actions/reject').set('HX-Request', 'true');
+    expect(frag.text.startsWith('<dialog id="action-dialog"')).toBe(true);
+    expect(frag.text).toContain('hx-post="/cases/case-006/actions/reject"');
+    const full = await request(app).get('/cases/case-006/actions/reject');
+    expect(full.text).toContain('<html');
+    expect(full.text).toContain('<dialog id="action-dialog"');
+  });
+});
+
+describe('POST /cases/:id/actions/:action', () => {
+  it('forwards the note and analyst header, then renders the refreshed case and toast', async () => {
+    const { app, calls } = buildApp();
+    const res = await request(app)
+      .post('/cases/case-006/actions/approve')
+      .set('HX-Request', 'true')
+      .set('Cookie', 'analyst_id=ana-003')
+      .type('form')
+      .send({ note: 'Documents verified in person.' });
+    expect(res.status).toBe(200);
+    const post = calls.find((c) => c.init?.method === 'POST');
+    expect(post).toBeDefined();
+    expect(post!.url).toBe('http://api.test/api/cases/case-006/actions');
+    const headers = post!.init!.headers as Record<string, string>;
+    expect(headers['x-analyst-id']).toBe('ana-003');
+    expect(JSON.parse(post!.init!.body as string)).toEqual({ action: 'approve', note: 'Documents verified in person.' });
+    expect(res.text).toContain('id="case-main"');
+    expect(res.text).toContain('Case approved.');
+    expect(res.text).toContain('id="dialog-slot" hx-swap-oob="true"');
+  });
+
+  it('redirects back to the case for non-htmx form posts', async () => {
+    const { app } = buildApp();
+    const res = await request(app).post('/cases/case-006/actions/approve').type('form').send({ note: 'ok note' });
+    expect(res.status).toBe(303);
+    expect(res.headers.location).toBe('/cases/case-006?done=approve');
+  });
+
+  it('rejects an invalid note client-side without calling the API', async () => {
+    const { app, calls } = buildApp();
+    const res = await request(app)
+      .post('/cases/case-006/actions/reject')
+      .set('HX-Request', 'true')
+      .type('form')
+      .send({ note: 'short' });
+    expect(res.status).toBe(200);
+    expect(res.headers['hx-retarget']).toBe('#dialog-slot');
+    expect(res.text).toContain('Note must be at least 10 characters.');
+    expect(res.text).toContain('>short</textarea>');
+    expect(calls.some((c) => c.init?.method === 'POST')).toBe(false);
+  });
+
+  it('renders the server validation error message inside the dialog', async () => {
+    const { app } = buildApp({
+      action: () =>
+        json({ error: { code: 'FORBIDDEN', message: "Resolving an escalated case requires role 'senior_analyst'." } }, 403),
+    });
+    const res = await request(app)
+      .post('/cases/case-006/actions/approve')
+      .set('HX-Request', 'true')
+      .type('form')
+      .send({ note: 'Looks fine after review.' });
+    expect(res.status).toBe(200);
+    expect(res.headers['hx-retarget']).toBe('#dialog-slot');
+    expect(res.text).toContain('role="alert"');
+    expect(res.text).toContain('Resolving an escalated case requires role &#x27;senior_analyst&#x27;.');
+
+    const full = await request(app).post('/cases/case-006/actions/approve').type('form').send({ note: 'Looks fine after review.' });
+    expect(full.status).toBe(403);
+    expect(full.text).toContain('<html');
+    expect(full.text).toContain('senior_analyst');
+  });
+});
+
+describe('POST /switch-analyst', () => {
+  it('sets an HttpOnly SameSite=Lax cookie and redirects back', async () => {
+    const { app } = buildApp();
+    const res = await request(app).post('/switch-analyst').type('form').send({ analystId: 'ana-003', returnTo: '/cases/case-006' });
+    expect(res.status).toBe(303);
+    expect(res.headers.location).toBe('/cases/case-006');
+    const cookie = res.headers['set-cookie']?.[0] ?? '';
+    expect(cookie).toContain('analyst_id=ana-003');
+    expect(cookie).toContain('HttpOnly');
+    expect(cookie).toContain('SameSite=Lax');
+  });
+
+  it('rejects unknown analysts and open redirects', async () => {
+    const { app } = buildApp();
+    expect((await request(app).post('/switch-analyst').type('form').send({ analystId: 'nope' })).status).toBe(400);
+    const res = await request(app).post('/switch-analyst').type('form').send({ analystId: 'ana-001', returnTo: '//evil.test' });
+    expect(res.headers.location).toBe('/');
+  });
+
+  it('asks htmx to refresh the page', async () => {
+    const { app } = buildApp();
+    const res = await request(app).post('/switch-analyst').set('HX-Request', 'true').type('form').send({ analystId: 'ana-001' });
+    expect(res.status).toBe(204);
+    expect(res.headers['hx-refresh']).toBe('true');
+  });
+});
