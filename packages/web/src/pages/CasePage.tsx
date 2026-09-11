@@ -195,7 +195,7 @@ function CustomerSection({ customer }: { customer: Customer }) {
   );
 }
 
-function RiskPanel({ explanation }: { explanation: RiskExplanation }) {
+export function RiskPanel({ explanation }: { explanation: RiskExplanation }) {
   const factors = useMemo(
     () => [...explanation.factors].sort((a, b) => b.weight - a.weight),
     [explanation.factors],
@@ -243,7 +243,7 @@ function RiskPanel({ explanation }: { explanation: RiskExplanation }) {
             {factors.length} contributing {factors.length === 1 ? 'factor' : 'factors'}
           </h3>
           {factors.length === 0 ? (
-            <p className={styles.noFactors}>No structured risk signals were triggered.</p>
+            <p className={styles.noFactors}>No structured risk signals were recorded.</p>
           ) : (
             <ol className={styles.factorList}>
               {factors.map((factor) => (
@@ -268,6 +268,8 @@ function RiskPanel({ explanation }: { explanation: RiskExplanation }) {
           <span>+{primaryDriver.weight} points</span>
         </div>
       ) : null}
+
+      <p>{explanation.summary}</p>
 
       {factors.length > 0 ? (
         <details className={styles.evidence}>
