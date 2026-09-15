@@ -13,7 +13,7 @@ npm run seed                # populate packages/server/data/kyc.db
 # Existing DB instead: npm run seed:logins (resets passwords/sessions, preserves business data)
 npm run dev:server          # API on http://127.0.0.1:4000
 npm run dev:local -w variants/web-c  # explicit local HTTP opt-in on http://localhost:3000
-PORT=3001 npm run dev:local -w variants/web-c  # independent second console
+npm exec -w variants/web-c -- cross-env PORT=3001 npm run dev:local  # independent second console
 ```
 
 Sign in with email and password. The API's local demo authentication must be explicitly enabled with
@@ -24,7 +24,8 @@ public password `demo-password-2026`:
 - `marta.ellison@northwind-demo.example` — senior analyst
 - `sofia.chen@northwind-demo.example` — compliance manager
 
-The `dev:local` script enables HTTP cookies and shows public demo credential help. The ordinary
+The `dev:local` script uses `cross-env` for Windows, macOS and Linux. It enables HTTP cookies
+and shows public demo credential help. The ordinary
 `dev` and `start` scripts keep secure defaults. Neither local opt-in is permitted in production.
 All identities, permissions and case actions are still authorized by the API.
 

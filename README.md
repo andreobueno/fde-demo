@@ -45,7 +45,26 @@ npm run dev:server   # API on http://127.0.0.1:4000; enables LOCAL_DEMO_AUTH=tru
 npm run dev:web      # UI dev server on http://localhost:5173 (see UI section above)
 ```
 
-Run the two dev servers in separate terminals. For an existing fictional database, use
+Run the two dev servers in separate terminals. The development scripts use `cross-env`
+to set environment variables on Windows, macOS and Linux.
+
+### Windows (PowerShell or Command Prompt)
+
+After updating the repository, install the updated development dependencies and start the API
+from the repository root:
+
+```text
+npm install
+npm run dev:server
+```
+
+In another terminal at the repository root, run `npm run dev:web`. No Bash shell or manual
+environment-variable assignment is required. Optional shell examples below marked `bash`
+use Unix shell syntax.
+
+### Demo users
+
+For an existing fictional database, use
 `npm run seed:logins` instead of `npm run seed`: it adds/resets demo passwords and revokes
 browser sessions while preserving cases, refund decisions and business audit history.
 It provisions only identities already in that database; use the command's printed emails for
