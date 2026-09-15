@@ -61,8 +61,9 @@ export function seedDemoLogins(
   if (new Set(logins.map(({ email }) => email)).size !== logins.length) {
     throw new Error('Could not generate unique demo email addresses.');
   }
-  return db.transaction(() =>
-    logins.map((login) => {
+  return db.transaction(() => {
+    db.prepare('DELETE FROM analyst_credentials').run();
+    return logins.map((login) => {
       setAnalystPassword(
         db,
         login.analystId,
@@ -72,6 +73,6 @@ export function seedDemoLogins(
       );
       revokeSessionsFor(db, login.analystId);
       return login;
-    }),
-  ).immediate();
+    });
+  }).immediate();
 }
