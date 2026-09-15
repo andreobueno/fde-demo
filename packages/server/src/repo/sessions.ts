@@ -7,6 +7,7 @@ import { getAnalyst } from './analysts.js';
 export const SESSION_LIFETIME_MS = 12 * 60 * 60 * 1000;
 /** Sessions end this long after the last authenticated request. */
 export const SESSION_IDLE_TIMEOUT_MS = 60 * 60 * 1000;
+const SESSION_CLEANUP_LIMIT = 1_000;
 
 export interface SessionMetadata {
   analystId: string;
@@ -30,6 +31,19 @@ function hashToken(token: string): string {
   return createHash('sha256').update(token).digest('hex');
 }
 
+function purgeExpiredSessions(db: Db, now: Date): void {
+  const idleCutoff = new Date(now.getTime() - SESSION_IDLE_TIMEOUT_MS).toISOString();
+  db.prepare(`
+    DELETE FROM sessions
+    WHERE token_hash IN (
+      SELECT token_hash
+      FROM sessions
+      WHERE expires_at <= ? OR last_used_at <= ?
+      LIMIT ?
+    )
+  `).run(now.toISOString(), idleCutoff, SESSION_CLEANUP_LIMIT);
+}
+
 export function createSession(
   db: Db,
   analystId: string,
@@ -39,6 +53,7 @@ export function createSession(
   const lifetime = options.lifetimeMs ?? SESSION_LIFETIME_MS;
   return db.transaction(() => {
     if (!getAnalyst(db, analystId)) throw new Error('Unknown analyst.');
+    purgeExpiredSessions(db, now);
     const token = randomBytes(32).toString('base64url');
     const createdAt = now.toISOString();
     const expiresAt = new Date(now.getTime() + lifetime).toISOString();

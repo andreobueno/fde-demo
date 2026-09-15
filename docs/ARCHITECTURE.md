@@ -10,8 +10,9 @@ hashes; sessions are opaque bearer tokens with only SHA-256 hashes persisted. Su
 creation/revocation and append-only authentication events commit atomically.
 
 The adapter is explicitly enabled in the dev command and prohibited in production. The selected
-SPA's local role picker maps labels to seeded credentials, but installs only the actor and role
-returned by `/api/me`; the picker never authenticates with its label or an analyst ID. Both SPAs
+SPA's local role picker loads the current seeded credential mapping from the local adapter, but
+installs only the actor and role returned by `/api/me`; the picker never authenticates with its
+label or an analyst ID. Both SPAs
 use tab/origin-scoped sessionStorage and restore actor/role from `/api/me`; the SSR adapter holds
 the same session in an HttpOnly cookie. Instance isolation changes credential storage, not the
 shared server RBAC, domain services or business audit architecture. Existing automation tokens

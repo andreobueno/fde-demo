@@ -50,4 +50,25 @@ describe('local demo credential provisioning', () => {
     expect(listAuthEvents(db)).toEqual(events);
     expect(db.prepare('SELECT COUNT(*) AS n FROM analyst_credentials').get()).toEqual({ n: 3 });
   });
+
+  it('assigns stable unique emails when fictional analysts share a name', () => {
+    db.prepare('UPDATE analysts SET name = ? WHERE id IN (?, ?)')
+      .run(
+        'Alex Kim',
+        REFUND_ACTORS.analyst.id,
+        REFUND_ACTORS.compliance_manager.id,
+      );
+
+    const first = seedDemoLogins(db);
+    const duplicateEmails = first
+      .filter(({ name }) => name === 'Alex Kim')
+      .map(({ email }) => email);
+
+    expect(new Set(first.map(({ email }) => email)).size).toBe(first.length);
+    expect(duplicateEmails).toHaveLength(2);
+    expect(duplicateEmails).not.toContain(demoEmail('Alex Kim'));
+    expect(seedDemoLogins(db).map(({ email }) => email)).toEqual(
+      first.map(({ email }) => email),
+    );
+  });
 });

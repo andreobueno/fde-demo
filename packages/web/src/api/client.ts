@@ -21,7 +21,7 @@ import type { QueueFilters } from '../lib/queueFilters';
 import { queueFiltersToQuery } from '../lib/queueFilters';
 import { beginAuthentication, clearIdentity, completeAuthentication, credentialFor, getIdentity } from './identity';
 import { storedSession } from './sessionStorage';
-import { DEMO_USERS } from './demoUsers';
+import { DEMO_USERS, type DemoUserCredential } from './demoUsers';
 
 export class ApiError extends Error {
   status: number;
@@ -116,11 +116,24 @@ export function signInDemoUser(userId: string, signal?: AbortSignal): Promise<vo
   if (!import.meta.env.DEV) {
     return Promise.reject(new ApiError(404, 'LOCAL_AUTH_DISABLED', 'Mock-user sign-in is available only in local development.'));
   }
-  const user = DEMO_USERS.find(({ id }) => id === userId);
-  if (!user) {
+  if (!DEMO_USERS.some(({ id }) => id === userId)) {
     return Promise.reject(new ApiError(400, 'VALIDATION_ERROR', 'Choose a valid mock user.'));
   }
-  return establishPasswordSession(user.email, 'demo-password-2026', signal, true);
+  return request<DemoUserCredential[]>(
+    '/api/auth/demo-users',
+    '',
+    signal ?? new AbortController().signal,
+  ).then((users) => {
+    const user = users.find(({ id }) => id === userId);
+    if (!user) {
+      throw new ApiError(
+        409,
+        'DEMO_USER_UNAVAILABLE',
+        'The selected mock user is not provisioned in this database.',
+      );
+    }
+    return establishPasswordSession(user.email, 'demo-password-2026', signal, true);
+  });
 }
 
 export async function restoreSession(signal?: AbortSignal): Promise<void> {

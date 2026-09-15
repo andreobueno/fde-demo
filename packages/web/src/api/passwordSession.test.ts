@@ -43,18 +43,24 @@ afterEach(() => { clearIdentity(); vi.unstubAllGlobals(); });
 describe('local password sessions', () => {
   it('verifies a chosen mock user through /api/me before installing the server identity', async () => {
     fetchMock
+      .mockResolvedValueOnce(Response.json([{
+        id: 'admin',
+        name: 'Retained Manager',
+        email: 'retained.manager@northwind-demo.example',
+      }]))
       .mockResolvedValueOnce(login(analyst))
       .mockResolvedValueOnce(Response.json(manager));
     await signInDemoUser('admin');
-    expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/auth/sign-in', expect.objectContaining({
+    expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/auth/demo-users', expect.anything());
+    expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/auth/sign-in', expect.objectContaining({
       method: 'POST',
       body: JSON.stringify({
-        email: 'sofia.chen@northwind-demo.example',
+        email: 'retained.manager@northwind-demo.example',
         password: 'demo-password-2026',
       }),
       headers: { 'content-type': 'application/json' },
     }));
-    expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/me', expect.objectContaining({
+    expect(fetchMock).toHaveBeenNthCalledWith(3, '/api/me', expect.objectContaining({
       headers: {
         'content-type': 'application/json',
         Authorization: `Bearer ${token}`,
@@ -73,8 +79,26 @@ describe('local password sessions', () => {
     expect(getIdentity()).toBeNull();
   });
 
+  it('does not sign in when the selected role is absent from retained credentials', async () => {
+    fetchMock.mockResolvedValueOnce(Response.json([]));
+
+    await expect(signInDemoUser('admin')).rejects.toMatchObject({
+      status: 409,
+      code: 'DEMO_USER_UNAVAILABLE',
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(getIdentity()).toBeNull();
+    expect(storedSession()).toBeNull();
+  });
+
   it('revokes a mock-user session that fails the /api/me identity check', async () => {
     fetchMock
+      .mockResolvedValueOnce(Response.json([{
+        id: 'analyst',
+        name: 'Retained Analyst',
+        email: 'retained.analyst@northwind-demo.example',
+      }]))
       .mockResolvedValueOnce(login(analyst))
       .mockResolvedValueOnce(Response.json({}, { status: 401 }))
       .mockResolvedValueOnce(new Response(null, { status: 204 }));

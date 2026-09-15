@@ -6,7 +6,11 @@ import { addRefund, REFUND_ACTORS, refundFixtureContext } from '../refundFixture
 import { listAuthEvents } from '../repo/authEvents.js';
 import { setAnalystPassword } from '../repo/credentials.js';
 import { issueAccessToken } from '../repo/accessTokens.js';
-import { SESSION_IDLE_TIMEOUT_MS, SESSION_LIFETIME_MS } from '../repo/sessions.js';
+import {
+  createSession,
+  SESSION_IDLE_TIMEOUT_MS,
+  SESSION_LIFETIME_MS,
+} from '../repo/sessions.js';
 import { MAX_FAILED_ATTEMPTS } from '../services/authService.js';
 import { createApp } from './app.js';
 import { MAX_SOURCE_FAILURES } from './auth.js';
@@ -44,6 +48,36 @@ afterEach(() => {
 });
 
 describe('POST /api/auth/sign-in', () => {
+  it('lists actual retained demo credentials for the role picker', async () => {
+    db.prepare('UPDATE analysts SET name = ? WHERE id = ?')
+      .run('Renamed Manager', manager.id);
+    setAnalystPassword(
+      db,
+      manager.id,
+      'renamed.manager@northwind-demo.example',
+      PASSWORD,
+      { parameters: fast },
+    );
+
+    const response = await request(app).get('/api/auth/demo-users');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual([
+      {
+        id: 'analyst',
+        name: analyst.name,
+        email: emailFor(analyst.id),
+      },
+      {
+        id: 'admin',
+        name: 'Renamed Manager',
+        email: 'renamed.manager@northwind-demo.example',
+      },
+    ]);
+    expect(JSON.stringify(response.body)).not.toContain(PASSWORD);
+    expect(JSON.stringify(response.body)).not.toContain('scrypt');
+  });
+
   it('returns the identity, permissions and a session that authorizes requests', async () => {
     const response = await signIn(emailFor(manager.id), PASSWORD);
     expect(response.status).toBe(201);
@@ -164,6 +198,21 @@ describe('sessions', () => {
     expect(await identity(third)).toBe(analyst.id);
   });
 
+  it('purges abandoned expired and idle sessions when creating a new session', async () => {
+    const staleTime = new Date(NOW.getTime() - SESSION_IDLE_TIMEOUT_MS - 1);
+    createSession(db, analyst.id, { now: staleTime });
+    createSession(db, manager.id, { now: staleTime });
+    db.prepare('UPDATE sessions SET expires_at = ? WHERE analyst_id = ?')
+      .run(new Date(NOW.getTime() - 1).toISOString(), analyst.id);
+    expect(db.prepare('SELECT COUNT(*) AS n FROM sessions').get()).toEqual({ n: 2 });
+
+    await tokenFor(analyst.id);
+
+    expect(db.prepare('SELECT analyst_id FROM sessions').all()).toEqual([
+      { analyst_id: analyst.id },
+    ]);
+  });
+
   it('serves the current role from the database without a new sign-in', async () => {
     const token = await tokenFor(analyst.id);
     db.prepare('UPDATE analysts SET role = ? WHERE id = ?').run('compliance_manager', analyst.id);
@@ -257,6 +306,7 @@ describe('local authentication boundary', () => {
     const disabled = await signIn(emailFor(analyst.id), PASSWORD);
     expect(disabled.status).toBe(404);
     expect(disabled.body.error.code).toBe('LOCAL_AUTH_DISABLED');
+    expect((await request(app).get('/api/auth/demo-users')).status).toBe(404);
     expect((await request(app).get('/api/me').set('Authorization', `Bearer ${session}`)).status).toBe(401);
     expect((await request(app).get('/api/me').set('Authorization', `Bearer ${automation}`)).status).toBe(200);
   });

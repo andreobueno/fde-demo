@@ -3,12 +3,18 @@ import { z } from 'zod';
 import type { Db } from '../db.js';
 import { ApiError } from '../errors.js';
 import { MAX_PASSWORD_LENGTH } from '../domain/password.js';
+import { listDemoCredentials } from '../repo/credentials.js';
 import { authenticateSession } from '../repo/sessions.js';
 import { recordAuthEvent } from '../repo/authEvents.js';
 import { signIn, signOut, SignInThrottle } from '../services/authService.js';
 
 export const BEARER_PATTERN = /^Bearer ([A-Za-z0-9_-]{43})$/i;
 export const MAX_SOURCE_FAILURES = 64;
+const DEMO_USER_ROLES = [
+  { id: 'analyst', role: 'analyst' },
+  { id: 'reviewer', role: 'senior_analyst' },
+  { id: 'admin', role: 'compliance_manager' },
+] as const;
 
 const signInSchema = z.object({
   email: z.string().trim().min(3).max(254).email(),
@@ -20,6 +26,20 @@ export function authRoutes(db: Db): Router {
   const throttle = new SignInThrottle();
   const sourceThrottle = new SignInThrottle(MAX_SOURCE_FAILURES);
   router.use(express.json({ limit: '2kb' }));
+
+  router.get('/demo-users', (_req: Request, res: Response) => {
+    const credentials = listDemoCredentials(db);
+    res.json(DEMO_USER_ROLES.flatMap(({ id, role }) => {
+      const credential = credentials.find((candidate) => candidate.role === role);
+      return credential
+        ? [{
+            id,
+            name: credential.name,
+            email: credential.email,
+          }]
+        : [];
+    }));
+  });
 
   router.post('/sign-in', (req: Request, res: Response, next: NextFunction) => {
     const source = req.socket.remoteAddress ?? 'local';

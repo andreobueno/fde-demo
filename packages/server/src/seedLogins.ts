@@ -19,14 +19,17 @@ export interface SeededLogin {
   email: string;
 }
 
-export function demoEmail(name: string): string {
-  const local = name
+function demoEmailLocalPart(name: string): string {
+  return name
     .toLowerCase()
     .normalize('NFKD')
     .replace(/[^a-z ]/g, '')
     .trim()
-    .replace(/ +/g, '.');
-  return `${local}@${DEMO_EMAIL_DOMAIN}`;
+    .replace(/ +/g, '.') || 'analyst';
+}
+
+export function demoEmail(name: string): string {
+  return `${demoEmailLocalPart(name)}@${DEMO_EMAIL_DOMAIN}`;
 }
 
 export function seedDemoLogins(
@@ -37,12 +40,38 @@ export function seedDemoLogins(
     throw new Error('Demo logins cannot be seeded in production.');
   }
   const password = options.password ?? DEMO_PASSWORD;
+  const analysts = listAnalysts(db);
+  const localPartCounts = new Map<string, number>();
+  for (const { name } of analysts) {
+    const local = demoEmailLocalPart(name);
+    localPartCounts.set(local, (localPartCounts.get(local) ?? 0) + 1);
+  }
+  const logins = analysts.map(({ id, name, role }) => {
+    const local = demoEmailLocalPart(name);
+    const uniqueLocal = localPartCounts.get(local) === 1
+      ? local
+      : `${local}.${Buffer.from(id).toString('hex')}`;
+    return {
+      analystId: id,
+      name,
+      role,
+      email: `${uniqueLocal}@${DEMO_EMAIL_DOMAIN}`,
+    };
+  });
+  if (new Set(logins.map(({ email }) => email)).size !== logins.length) {
+    throw new Error('Could not generate unique demo email addresses.');
+  }
   return db.transaction(() =>
-    listAnalysts(db).map(({ id, name, role }) => {
-      const email = demoEmail(name);
-      setAnalystPassword(db, id, email, password, options.now ? { now: options.now } : {});
-      revokeSessionsFor(db, id);
-      return { analystId: id, name, role, email };
+    logins.map((login) => {
+      setAnalystPassword(
+        db,
+        login.analystId,
+        login.email,
+        password,
+        options.now ? { now: options.now } : {},
+      );
+      revokeSessionsFor(db, login.analystId);
+      return login;
     }),
   ).immediate();
 }

@@ -41,7 +41,7 @@ web-a was selected as the default: same features, simplest stack, fewest depende
 ```bash
 npm install          # installs all workspaces
 npm run seed         # DESTRUCTIVE: reset fictional KYC, refunds, audit data and demo logins
-npm run dev:server   # API on http://localhost:4000; enables LOCAL_DEMO_AUTH=true
+npm run dev:server   # API on http://127.0.0.1:4000; enables LOCAL_DEMO_AUTH=true
 npm run dev:web      # UI dev server on http://localhost:5173 (see UI section above)
 ```
 
@@ -53,7 +53,8 @@ older databases that do not include every account below.
 
 Choose one of these fictional users from the local role picker and click **Log in**. The selected
 label is a convenience mapping to the existing seeded credentials; it is not sent as an
-authoritative role or analyst ID.
+authoritative role or analyst ID. The picker reads the enabled local adapter's current credential
+mapping, so `seed:logins` continues to work when retained fictional analysts were renamed.
 
 | Picker label | Seeded account | Server role |
 | --- | --- | --- |

@@ -24,9 +24,9 @@ describe('credential-based sign-in', () => {
   it('offers local mock users without exposing credentials in the form', () => {
     const html = renderToStaticMarkup(<ManualIdentityForm />);
     expect(html).toContain('<label for="demo-user">Mock user</label>');
-    expect(html).toContain('Analyst — Grete Lindholm');
-    expect(html).toContain('Reviewer — Marta Ellison');
-    expect(html).toContain('Admin — Sofia Chen');
+    expect(html).toContain('>Analyst</option>');
+    expect(html).toContain('>Reviewer</option>');
+    expect(html).toContain('>Admin</option>');
     expect(html).not.toContain('Access token');
     expect(html).not.toContain('type="password"');
     expect(html).not.toContain('demo-password-2026');
