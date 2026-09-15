@@ -1,14 +1,35 @@
 # KYC Review Console — API contract (v1)
 
 Backend: Express + better-sqlite3, TypeScript. Base URL `http://localhost:4000`.
-All responses JSON. Errors: `{ "error": { "code": string, "message": string, "details"?: unknown } }` with 400/401/403/404/409/500. Responses use `Cache-Control: no-store`.
+All responses JSON except `204` sign-out. Errors: `{ "error": { "code": string, "message": string, "details"?: unknown } }` with 400/401/403/404/409/429/500. Responses use `Cache-Control: no-store`.
 
 ## Authentication and identity
-Every API data/action request except `GET /api/health` requires `Authorization: Bearer <token>`.
+Every protected API data/action request requires `Authorization: Bearer <token>`.
 CORS `OPTIONS` preflight returns protocol headers only; the subsequent data/action request still requires authentication.
-An administrator provisions a per-user, 43-character base64url credential through the local CLI
-documented in the root README. Only its SHA-256 hash is stored; it expires after eight hours and
-can be revoked. No default credential is seeded.
+`GET /api/health` is anonymous. With `LOCAL_DEMO_AUTH=true`, these local adapter routes are enabled:
+
+- `POST /api/auth/sign-in`: strict JSON `{email: string, password: string}`.
+  Emails are trimmed and lowercased. Server verifies the scrypt password hash and returns
+  `201 {analyst: CurrentAnalyst, session: {token: string, expiresAt: string, idleTimeoutMs: number}}`.
+  The opaque token contains 32 random bytes (43 base64url characters). Only its SHA-256 hash is stored.
+  Session lifetime is 12 hours, idle timeout one hour; protected requests renew the idle window.
+  The token is delivered only to the sign-in caller, never in URLs, logs or other API responses.
+  Wrong passwords/unknown emails both return `401 INVALID_CREDENTIALS`, malformed/extra fields
+  return `400 VALIDATION_ERROR`. Login failures are limited per email (8) and connection IP (64)
+  in a 15-minute window; further attempts return `429 TOO_MANY_ATTEMPTS`. Limits are in-process
+  and reset on API restart. Reverse proxies share the source limit; forwarded IP headers are not trusted.
+- `POST /api/auth/sign-out`: bearer session token, no body. Returns `204`, deletes only that
+  session hash. Missing, expired or already revoked credentials are accepted idempotently.
+  Other sessions (including another login for the same analyst) remain valid. Automation
+  credentials are not revoked through this route.
+
+`npm run seed` or the non-destructive `npm run seed:logins` provisions fictional local
+passwords documented in README. These are public demo credentials. Seeding rejects production,
+and `NODE_ENV=production` rejects enabling local authentication. When disabled, `/api/auth/*`
+returns `404 LOCAL_AUTH_DISABLED`, and existing demo session tokens cannot access protected routes.
+
+For automation an administrator can still issue a separate eight-hour bearer credential through
+the existing CLI. Only its hash is stored. No default automation tokens are seeded.
 
 Missing, malformed, unknown, expired or revoked credentials → generic `401`, without a fallback
 identity. The server derives the actor and current role from the token's stored identity.
@@ -17,7 +38,7 @@ role header or request-body actor cannot authenticate or switch the caller.
 
 `GET /api/me` verifies the credential and returns the current identity and permissions. The
 authenticated analyst directory contains no credentials or hashes. Production provisioning and
-sign-in should use controlled SSO/OIDC; this prototype uses locally issued credentials.
+sign-in should use controlled SSO/OIDC and managed sessions; this prototype's adapter is local-only.
 
 All roles read cases, audit history and policy, start review and escalate. Analysts cannot approve/reject. Seniors can approve/reject low/medium cases. Compliance managers can approve/reject any risk and change policy. The same decision rules apply to pending, in-review and escalated cases. No role may edit/delete audit history.
 

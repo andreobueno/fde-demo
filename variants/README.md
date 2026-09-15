@@ -18,8 +18,14 @@ npm install              # at repo root — installs all workspaces incl. varian
 npm run seed && npm run dev:server    # API on http://localhost:4000
 
 npm run dev:web-b        # web-b on http://localhost:5173
-npm run dev:web-c        # web-c on http://localhost:3000
+npm run dev:local -w variants/web-c    # web-c, explicit local HTTP on port 3000
 ```
+
+Both variants now use the [local demo email/password accounts](../README.md#setup--run),
+server sessions and API-enforced roles. Refresh verifies the saved session; signing out revokes
+only that session. Web-b uses origin/tab-scoped sessionStorage. Web-c uses HttpOnly cookies
+whose names are derived from the configured port, because cookies themselves are not port scoped.
+Use distinct ports to evaluate different users simultaneously; see each variant's README.
 
 Each variant has its own scripts: `npm run {dev,build,lint,typecheck,test}:web-b` and
 `...:web-c`. See each variant's `README.md` for details.

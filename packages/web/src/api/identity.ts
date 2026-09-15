@@ -1,4 +1,5 @@
 import type { CurrentAnalyst } from './types';
+import { storeSession } from './sessionStorage';
 
 export interface AuthenticatedIdentity {
   analyst: CurrentAnalyst;
@@ -19,16 +20,17 @@ export function subscribeIdentity(listener: () => void): () => void {
   return () => { listeners.delete(listener); };
 }
 
-export function clearIdentity(): void {
+export function clearIdentity(preserveStoredSession = false): void {
   controller.abort();
   controller = new AbortController();
   identity = null;
   accessToken = null;
+  if (!preserveStoredSession) storeSession(null);
   listeners.forEach((listener) => listener());
 }
 
-export function beginAuthentication(): AbortSignal {
-  clearIdentity();
+export function beginAuthentication(preserveStoredSession = false): AbortSignal {
+  clearIdentity(preserveStoredSession);
   return controller.signal;
 }
 
@@ -36,11 +38,13 @@ export function completeAuthentication(
   analyst: CurrentAnalyst,
   token: string,
   signal: AbortSignal,
+  persist = false,
 ): void {
   signal.throwIfAborted();
   if (signal !== controller.signal) throw new DOMException('Authentication cancelled', 'AbortError');
   identity = { analyst, signal };
   accessToken = token;
+  if (persist) storeSession(token);
   listeners.forEach((listener) => listener());
 }
 

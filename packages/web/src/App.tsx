@@ -11,7 +11,7 @@ import { RefundQueuePage } from './pages/RefundQueuePage';
 import { RefundPage } from './pages/RefundPage';
 
 function Layout() {
-  const { analystId, analyst, signOut } = useAnalyst();
+  const { analystId, analyst, signOut, restoring, authError, retryRestore } = useAnalyst();
   const { pathname } = useLocation();
   return (
     <div>
@@ -37,7 +37,14 @@ function Layout() {
           {analyst ? <AnalystSelector analyst={analyst} onSignOut={signOut} /> : null}
         </div>
       </header>
-      {analyst ? <Outlet key={`${analystId}:${pathname}`} /> : <ManualIdentityForm />}
+      {authError ? (
+        <div role="alert" style={{ padding: 24 }}>
+          <p>{authError}</p>
+          <button onClick={retryRestore}>Retry session check</button>
+        </div>
+      ) : null}
+      {restoring ? <p role="status">Checking your session…</p>
+        : analyst ? <Outlet key={`${analystId}:${pathname}`} /> : <ManualIdentityForm />}
     </div>
   );
 }

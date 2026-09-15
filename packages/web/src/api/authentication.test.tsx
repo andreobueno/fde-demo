@@ -23,7 +23,9 @@ afterEach(() => { clearIdentity(); vi.unstubAllGlobals(); });
 describe('credential-based sign-in', () => {
   it('requires a masked credential without exposing selectable roles', () => {
     const html = renderToStaticMarkup(<ManualIdentityForm />);
-    expect(html).toContain('<label for="access-token">Access token</label>');
+    expect(html).toContain('<label for="sign-in-email">Email</label>');
+    expect(html).toContain('<label for="sign-in-password">Password</label>');
+    expect(html).not.toContain('Access token');
     expect(html).toContain('type="password"');
     expect(html).toContain('Sign in</button>');
     expect(html).not.toContain('Demo identity');

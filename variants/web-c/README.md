@@ -10,14 +10,30 @@ dialog and the post-action refresh; every interaction also works as a plain form
 ```bash
 npm install                 # repo root
 npm run seed                # populate packages/server/data/kyc.db
+# Existing DB instead: npm run seed:logins (resets passwords/sessions, preserves business data)
 npm run dev:server          # API on http://localhost:4000
-ALLOW_INSECURE_LOCAL_AUTH=true npm run dev:web-c  # explicit local HTTP opt-in on http://localhost:3000
+npm run dev:local -w variants/web-c  # explicit local HTTP opt-in on http://localhost:3000
+PORT=3001 npm run dev:local -w variants/web-c  # independent second console
 ```
 
-Have an administrator issue an access token for your user using the API's administrative credential
-CLI, then enter it in the console's sign-in form. Seeding does not issue credentials. Tokens contain
-32 random bytes encoded as base64url (43 characters), expire after eight hours and can be revoked
-through the administrative CLI. There is no default user or freely selectable identity.
+Sign in with email and password. The API's local demo authentication must be explicitly enabled with
+`LOCAL_DEMO_AUTH=true` (`dev:server` enables it for local development). Fictional local users share the
+public password `demo-password-2026`:
+
+- `grete.lindholm@northwind-demo.example` — analyst
+- `marta.ellison@northwind-demo.example` — senior analyst
+- `sofia.chen@northwind-demo.example` — compliance manager
+
+The `dev:local` script enables HTTP cookies and shows public demo credential help. The ordinary
+`dev` and `start` scripts keep secure defaults. Neither local opt-in is permitted in production.
+All identities, permissions and case actions are still authorized by the API.
+
+Cookies are not port scoped. Each process instead uses `kyc_session_<PORT>` (default
+`kyc_session_3000`), so signing in or out on port 3001 does not change port 3000's session.
+Override `SESSION_COOKIE_NAME` with a unique name for each instance if needed (letters, digits,
+underscores and hyphens; legacy cookie names are reserved). The cookie name is captured from
+process configuration at startup, never from the request host. Ports share a host's cookies and
+are intended for trusted local console instances, not mutually untrusted applications.
 
 The console uses `Secure` cookies by default and requires HTTPS for sign-in and other form submissions.
 For local HTTP development only, set `ALLOW_INSECURE_LOCAL_AUTH=true` as above. This setting is refused
@@ -44,16 +60,21 @@ Checks: `npm run typecheck:web-c`, `npm run lint:web-c`, `npm run test:web-c`, `
     to the API with `Authorization: Bearer <token>`, and on success swaps `#case-main` plus out-of-band swaps that close the
     dialog and show a toast. Validation/403/409 messages from the API are re-rendered inside the dialog
     (`HX-Retarget`). Without JS the POST redirects back to the case with `?done=<action>`.
-- `POST /sign-in` verifies the submitted credential with `GET /api/me` before storing it in the
-  `kyc_access_token` cookie (`HttpOnly`, `SameSite=Strict`, `Secure`, `Path=/`, maximum age eight hours).
+- `POST /sign-in` sends email/password server-to-server to `POST /api/auth/sign-in`. Only the returned
+  session token is stored in the instance cookie (`HttpOnly`, `SameSite=Strict`, `Secure`, `Path=/`,
+  maximum age from the API's absolute `expiresAt`). Session and analyst payloads are validated before use.
   Every protected request rechecks `/api/me`, derives the displayed user from that response and forwards
   the token in API authorization headers. The analysts directory supplies labels and filters only.
-  Tokens are never included in rendered HTML, links or hidden form fields; legacy `analyst_id` cookies
-  are cleared and cannot authenticate. Invalid, expired or revoked credentials clear the browser cookie
+  Passwords and tokens are never included in rendered HTML, links or hidden form fields (except the
+  explicitly public demo password in local help). Legacy `analyst_id` and `kyc_access_token` cookies
+  are cleared and cannot authenticate. Invalid, expired or revoked sessions clear the browser cookie
   and return HTTP 401 with sign-in UI; htmx receives `HX-Redirect: /sign-in` for a full-page navigation.
-- `POST /sign-out` clears the browser credential and redirects to the sign-in page. To switch users,
-  sign out and enter the other user's valid token. Signing out does not revoke an admin-issued token;
-  revocation is performed through the administrative CLI. No request retries under a fallback identity.
+- `POST /sign-out` revokes only this session with `POST /api/auth/sign-out` and clears its browser
+  cookie. Failed revocation still clears the cookie and displays an explicit warning, including on
+  htmx redirects. To switch users, sign out and enter the other user's email/password.
+  Action and sign-out forms include an expected-identity consistency guard; stale forms are rejected
+  when their user no longer matches `/api/me`. Mutations also forward the verified actor as
+  `x-analyst-id`; this is never used as authentication. No request retries under a fallback identity.
 - Audit chain verification is computed in Node (`src/lib/audit.ts`, mirrors `packages/server/src/domain/audit.ts`).
 - Security headers: a CSP of `default-src 'self'; script-src 'self'; style-src 'self'; ...` (no inline
   scripts or styles — the risk meters use `<meter>` instead of inline widths), `X-Content-Type-Options`,
@@ -83,8 +104,9 @@ Dev-only: `typescript`, `tsx` (run TS directly), `vitest` + `supertest` (route t
 `test/routes.test.ts` drives the Express app with supertest against a stubbed `fetch` (queue rendering,
 htmx fragment + `HX-Push-Url`, unreachable API page, case page formatting and chain indicator, 404 page,
 dialog fragment, action POST forwarding note + bearer credential, client-side and server-side validation
-errors rendered in the dialog, sign-in/sign-out, expired/revoked credentials, cookie attributes,
-local HTTP opt-in, production fail-closed configuration and cross-site request rejection).
+errors rendered in the dialog, password sign-in/sign-out and API revocation, expired/revoked sessions,
+malformed API responses, stale forms, independent instance cookies, security attributes, local HTTP
+opt-in, production fail-closed configuration and cross-site request rejection).
 Synthetic fixture tokens and a stubbed API exercise the contract; these are not live-API or browser tests.
 `test/filters.test.ts` covers URL ↔ filter state,
 `test/validation.test.ts` the note rules, `test/audit.test.ts` the hash-chain verifier against a fixture

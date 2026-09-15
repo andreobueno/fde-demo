@@ -191,3 +191,47 @@ CREATE TABLE IF NOT EXISTS access_tokens (
 );
 
 CREATE INDEX IF NOT EXISTS access_tokens_analyst_id ON access_tokens(analyst_id);
+
+CREATE TABLE IF NOT EXISTS analyst_credentials (
+  analyst_id TEXT PRIMARY KEY NOT NULL REFERENCES analysts(id) ON DELETE CASCADE,
+  email TEXT NOT NULL UNIQUE CHECK (email = lower(email) AND email LIKE '_%@_%._%'),
+  password_hash TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+  token_hash TEXT PRIMARY KEY NOT NULL CHECK (
+    length(token_hash) = 64 AND token_hash NOT GLOB '*[^0-9a-f]*'
+  ),
+  analyst_id TEXT NOT NULL REFERENCES analysts(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL,
+  last_used_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL CHECK (expires_at > created_at)
+);
+
+CREATE INDEX IF NOT EXISTS sessions_analyst_id ON sessions(analyst_id);
+
+CREATE TABLE IF NOT EXISTS auth_events (
+  id TEXT PRIMARY KEY,
+  created_at TEXT NOT NULL,
+  event TEXT NOT NULL CHECK (
+    event IN ('sign_in_succeeded', 'sign_in_failed', 'sign_in_throttled', 'sign_out')
+  ),
+  analyst_id TEXT REFERENCES analysts(id),
+  email TEXT,
+  reason TEXT
+);
+
+CREATE INDEX IF NOT EXISTS auth_events_created_at ON auth_events(created_at);
+
+CREATE TRIGGER IF NOT EXISTS auth_events_no_update
+BEFORE UPDATE ON auth_events
+BEGIN
+  SELECT RAISE(ABORT, 'auth_events is append-only');
+END;
+
+CREATE TRIGGER IF NOT EXISTS auth_events_no_delete
+BEFORE DELETE ON auth_events
+BEGIN
+  SELECT RAISE(ABORT, 'auth_events is append-only');
+END;
