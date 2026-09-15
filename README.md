@@ -124,6 +124,8 @@ management. `npm run dev:server` enables it. Normal server startup leaves it dis
 `NODE_ENV=production` rejects enabling it, and all demo seeding rejects production.
 An existing demo session cannot authenticate when the adapter is disabled.
 Do not expose this public-password demo API to untrusted networks.
+The main SPA's production build removes the role picker and demo password. It displays an
+SSO setup message; an actual SSO sign-in flow is not implemented.
 
 For production, integrate SSO/OIDC (for example Entra ID), controlled role provisioning,
 MFA, and managed server sessions behind HTTPS. SPA `sessionStorage` is readable by JavaScript:
