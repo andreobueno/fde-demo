@@ -13,7 +13,7 @@ npm workspaces monorepo:
 
 | Package | Role |
 | --- | --- |
-| `packages/server` | Express + better-sqlite3 API (TypeScript, ESM). Implements [`docs/API_CONTRACT.md`](docs/API_CONTRACT.md). Layered `http → services → domain (pure) → repo → SQLite`; see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). |
+| `packages/server` | Express + better-sqlite3 API (TypeScript, ESM). Implements [`docs/API_CONTRACT.md`](docs/API_CONTRACT.md). HTTP routes, transactional services, pure domain rules and repositories over SQLite; see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). |
 | `packages/web` | Default UI: Vite + React 18 + react-router-dom SPA. Talks to the API over HTTP on `http://127.0.0.1:4000` (Vite proxies `/api/*`). |
 | `variants/web-b`, `variants/web-c` | Alternative UI implementations evaluated during selection — see [`variants/README.md`](variants/README.md). |
 
@@ -106,9 +106,8 @@ npm run dev:web:second   # http://localhost:5174
 
 Open each URL in its own tab. Choose Analyst on port 5173 and Admin on port 5174.
 Both see the same fictional data, with their own server-enforced permissions. Switching
-or signing out on one port does not change the other session. The strict port setting
-on `dev:web:second` prevents Vite from silently choosing a different second port. The first
-server may choose another free port if 5173 is occupied; use the URL printed by Vite.
+or signing out on one port does not change the other session. Both commands use strict
+ports and fail if their configured port is occupied, rather than silently choosing another.
 
 SPA session tokens use `sessionStorage`, which is isolated by origin **including port** and
 by tab. SPA authentication does not use cookies; same-origin requests still carry cookies
@@ -121,7 +120,7 @@ SSR uses HttpOnly cookies with a per-instance name; see its README before runnin
 
 This is an explicit **local development authentication adapter**, not production identity
 management. `npm run dev:server` enables it. Normal server startup leaves it disabled;
-`NODE_ENV=production` rejects enabling it, and all demo seeding rejects production.
+`NODE_ENV=production` rejects enabling it and rejects the full/login seed commands.
 An existing demo session cannot authenticate when the adapter is disabled.
 Do not expose this public-password demo API to untrusted networks.
 The main SPA's production build removes the role picker and demo password. It displays an
@@ -149,7 +148,8 @@ the local machine.
 
 For an existing fictional demo database, run `npm run seed:refunds` to add refund fixtures
 without resetting KYC, existing refund decisions or audit history. Startup applies the schema
-migration; it does not populate new refund records automatically. Do not run demo seeds against
+migration; it does not populate new refund records automatically. Unlike the full/login seeds,
+the additive refund seed has no production-environment guard. Do not run demo seeds against
 real customer databases.
 
 Checks:
@@ -168,7 +168,7 @@ replace `web-b` with `web-c` for SSR.
 Environment variables (server): `PORT` (default `4000`), `HOST` (unset on normal startup;
 the dev script sets `127.0.0.1`), `KYC_DB_PATH` (default `packages/server/data/kyc.db`;
 `:memory:` supported), `LOCAL_DEMO_AUTH` (default off; dev script enables it), and `NODE_ENV`
-(`production` prohibits demo authentication and seeding). Without `HOST`, normal startup
+(`production` prohibits demo authentication and the full/login seed commands). Without `HOST`, normal startup
 listens on the unspecified interface. If changing the API port, update the UI proxy/API target
 too; it does not follow the server's `PORT` automatically.
 
