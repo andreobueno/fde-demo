@@ -19,21 +19,25 @@ npm workspaces monorepo:
 
 ### UI (`packages/web`)
 
-Minimal SPA: a case queue at `/`, case detail at `/cases/:id`, refund queue at `/refunds`, refund detail at `/refunds/:id`, and KYC policy at `/policy`. Both queues use the same table, filter chips, debounced search and pagination components; both detail pages use the same decision dialog and audit timeline. Plain CSS, no UI kit or data-fetching library. The dev server runs on `http://localhost:5173` and proxies `/api/*` to the API on port 4000. A local role picker maps fictional users to the password/session adapter and verifies the issued session through `/api/me`; refresh restores the identity from the server. Each local port can stay signed in as a different user. Production build emits `packages/web/dist/`.
+Minimal SPA: a case queue at `/`, case detail at `/cases/:id`, refund queue at `/refunds`, refund detail at `/refunds/:id`, approval-note policy at `/policy`, and risk-scoring policy at `/policy/risk`. Both queues use the same table, filter chips, debounced search and pagination components; both detail pages use the same decision dialog and audit timeline. Plain CSS, no UI kit or data-fetching library. The dev server defaults to `http://localhost:5173` and proxies `/api/*` to the API on port 4000. A local role picker maps fictional users to the password/session adapter and verifies the issued session through `/api/me`; refresh restores the identity from the server. Each local port can stay signed in as a different user. Production build emits `packages/web/dist/`.
 
 Two alternative UIs were built and evaluated; they are kept as reference implementations under `variants/`:
 
 - `variants/web-b` — component-library SPA: Tailwind CSS, shadcn-style primitives on Radix, TanStack Query + Table. Run: `npm run dev:web-b`.
 - `variants/web-c` — server-rendered: Express SSR + React 19 + htmx on port 3000. Run: `npm run dev:web-c`.
 
-The reference UIs use the same password/session API. SSR cookies require HTTPS by default; see
-[`variants/web-c/README.md`](variants/web-c/README.md) for the explicit local HTTP option.
+The reference UIs retain email/password sign-in over the same session API. They cover KYC
+review but do not include Refunds or the two policy editors. SSR cookies require HTTPS by default;
+for local HTTP, run `npm run dev:local -w variants/web-c` instead of `npm run dev:web-c`.
+See [`variants/web-c/README.md`](variants/web-c/README.md) for the cookie and deployment requirements.
 
-web-a was selected as the default: same features, simplest stack, fewest dependencies.
+At the initial KYC comparison, web-a was selected as the default for equivalent core workflows
+with the simplest stack and fewest dependencies. Subsequent portfolio features were added to
+`packages/web`; the reference variants are not at feature parity with it.
 
 ## Prerequisites
 
-- Node 20+ (`node -v`)
+- Node 22.x (22.13+) or Node 24+ (`node -v`). Node 20 users need 20.19+ for the locked ESLint tooling.
 - npm 10 (`npm -v`) — workspaces support is required
 
 ## Setup and run
@@ -73,13 +77,19 @@ older databases that do not include every account below.
 Choose one of these fictional users from the local role picker and click **Log in**. The selected
 label is a convenience mapping to the existing seeded credentials; it is not sent as an
 authoritative role or analyst ID. The picker reads the enabled local adapter's current credential
-mapping, so `seed:logins` continues to work when retained fictional analysts were renamed.
+mapping from `GET /api/auth/demo-users`, so `seed:logins` continues to work when retained
+fictional analysts were renamed. On a fresh seed, the choices are:
 
 | Picker label | Seeded account | Server role |
 | --- | --- | --- |
 | Analyst | Grete Lindholm | `analyst` |
 | Reviewer | Marta Ellison | `senior_analyst` |
 | Admin | Sofia Chen | `compliance_manager` |
+
+The reference UIs use the emails printed by `npm run seed` or `npm run seed:logins` and the
+fictional local password `demo-password-2026`. The main SPA supplies that password internally.
+If a retained database lacks a role, that picker choice cannot log in; reseeding logins does
+not create analysts or grant roles.
 
 Use **Sign out / switch user**, then choose another mock user. Logout revokes only that browser
 session, leaving other signed-in instances active. Sessions expire after one idle hour or
@@ -97,12 +107,14 @@ npm run dev:web:second   # http://localhost:5174
 Open each URL in its own tab. Choose Analyst on port 5173 and Admin on port 5174.
 Both see the same fictional data, with their own server-enforced permissions. Switching
 or signing out on one port does not change the other session. The strict port setting
-prevents Vite from silently choosing a different port.
+on `dev:web:second` prevents Vite from silently choosing a different second port. The first
+server may choose another free port if 5173 is occupied; use the URL printed by Vite.
 
 SPA session tokens use `sessionStorage`, which is isolated by origin **including port** and
-by tab; no cookie is shared across these SPA instances. The password and actor/role are never
-persisted in browser storage. A newly opened tab starts signed out, but browsers may copy
-storage when duplicating an existing tab; use the two distinct URLs above for this demo.
+by tab. SPA authentication does not use cookies; same-origin requests still carry cookies
+needed by an enclosing authenticated preview. The password and actor/role are never persisted
+in browser storage. Tabs may inherit a copy of `sessionStorage` from an opener or when duplicated;
+use the two distinct URLs above for independent demo sessions.
 SSR uses HttpOnly cookies with a per-instance name; see its README before running two SSR instances.
 
 ### Authentication scope
@@ -144,13 +156,22 @@ Checks:
 npm test             # vitest: server + web suites
 npm run lint         # eslint: server + web
 npm run typecheck    # tsc --noEmit: server + web
+npm run build:web    # tsc + Vite: default SPA production assets
 ```
 
-Per-variant equivalents exist for the alternative UIs (`npm run test:web-b`, `npm run typecheck:web-c`, etc.).
+The root checks cover only `packages/server` and `packages/web`. Run `npm run test:web-b`,
+`npm run lint:web-b`, `npm run typecheck:web-b`, and `npm run build:web-b` for the reference SPA;
+replace `web-b` with `web-c` for SSR.
 
-Environment variables (server): `PORT` (default `4000`), `KYC_DB_PATH` (default `packages/server/data/kyc.db`; `:memory:` supported), `LOCAL_DEMO_AUTH` (default off; dev script enables it).
+Environment variables (server): `PORT` (default `4000`), `HOST` (unset on normal startup;
+the dev script sets `127.0.0.1`), `KYC_DB_PATH` (default `packages/server/data/kyc.db`;
+`:memory:` supported), `LOCAL_DEMO_AUTH` (default off; dev script enables it), and `NODE_ENV`
+(`production` prohibits demo authentication and seeding). Without `HOST`, normal startup
+listens on the unspecified interface. If changing the API port, update the UI proxy/API target
+too; it does not follow the server's `PORT` automatically.
 
-Quick smoke test after `npm run dev:server`:
+Quick smoke test after issuing the optional automation token above and starting `npm run dev:server`.
+Replace `<id>` with a pending case ID from the response; the final command changes that case's state:
 
 ```bash
 curl -s http://127.0.0.1:4000/api/health
@@ -165,7 +186,7 @@ curl -s http://127.0.0.1:4000/api/health
 ## Analyst workflow
 
 1. **Queue** — `GET /api/cases` lists cases with status, risk level, score and customer summary; `GET /api/cases/stats` feeds the header counters.
-2. **Filter** — by `status`, `riskLevel` (multi-value), free-text `q` (reference, customer name, email), sorted by `createdAt`, `updatedAt` or `riskScore`.
+2. **Filter and sort** — by `status`, `riskLevel` (multi-value), free-text `q` (reference, customer name, email). All eight column headers toggle server-side sorting: Reference, Customer, Country, Risk, Status, Assigned to, Created and Updated. API sort keys are `reference`, `customer`, `country`, `riskScore`, `status`, `assignedTo`, `createdAt` and `updatedAt`; default is `createdAt desc`.
 3. **Open case** — `GET /api/cases/:id` returns the full customer record, the risk signals, the audit history and `allowedActions` for the calling analyst.
 4. **Review customer + risk signals** — verification flags, PEP/sanctions/adverse media, expected volume, source of funds.
 5. **Act** — `POST /api/cases/:id/actions` with `start_review`, `approve`, `reject` or `escalate` (rules below). The response includes the updated case and audit trail.
@@ -225,22 +246,22 @@ Refund endpoints are under `/api/refunds`; see [the API contract](docs/REFUNDS_A
 
 ## Risk scoring model
 
-Deterministic: score = sum of triggered signal weights, clamped to 0–100. Level: `< medium` low, `medium..high-1` medium, `≥ high` high. Weights and thresholds are **configuration, not code** — see [Risk policy](#risk-policy). Defaults:
+Deterministic: score = sum of triggered signal weights, clamped to 0–100. Level: `< medium` low, `medium..high-1` medium, `≥ high` high. Weights and score thresholds are stored configuration — see [Risk policy](#risk-policy). Trigger predicates, country lists and cutoffs such as $50,000 expected volume remain code-defined.
 
 The prototype deliberately uses deterministic explanations. A production implementation could augment this with an LLM, but the system should retain structured evidence and deterministic policy evaluation as the source of truth.
 
-This evaluation intentionally tests the AI-assisted layer over a working workflow rather than treating generated text as the workflow itself. Any future summary should point back to the recorded factors below; authorization, risk policy and case decisions remain deterministic.
+Devin was used to build the application; there is no runtime LLM or chatbot. The explanation demonstrates where an AI-assisted summary could sit over a working workflow. Any future summary should point back to the recorded factors below; authorization, risk policy and case decisions remain deterministic.
 
 That follows the same architectural direction as [Microsoft 365 Copilot over Dataverse](https://learn.microsoft.com/en-us/power-apps/maker/data-platform/data-platform-data-copilot): assistance sits over governed application data and respects the underlying access model. This prototype tests that seam with a deterministic explanation first, rather than pretending AI replaces the workflow.
 
 | Code | Default weight | Trigger |
 | --- | --- | --- |
-| `SANCTIONS_HIT` | 40 | Customer matches a sanctions list |
+| `SANCTIONS_HIT` | 40 | Recorded potential sanctions match |
 | `PEP` | 30 | Politically exposed person |
 | `HIGH_RISK_JURISDICTION` | 25 | Residence or nationality in the high-risk list |
 | `ADVERSE_MEDIA` | 10 per hit (max 30) | Adverse media hits |
 | `ID_DOC_UNVERIFIED` | 20 | ID document not verified |
-| `DOCUMENT_EXPIRING` | 10 | ID document expires in < 30 days |
+| `DOCUMENT_EXPIRING` | 10 | ID document expires in < 30 days, including already expired documents |
 | `HIGH_EXPECTED_VOLUME` | 15 | Unusual transaction volume (> 50k USD/month expected) |
 | `OPAQUE_SOURCE_OF_FUNDS` | 15 | Source of funds is `crypto`, `cash_intensive_business` or `unknown` |
 | `ADDRESS_UNVERIFIED` | 10 | Address not verified |
@@ -264,9 +285,14 @@ read-only. Saving calls `PUT /api/risk-policy`, which:
 - re-scores every **open** case (`pending`, `in_review`, `escalated`) inside the same transaction and appends a `RISK_RESCORED` audit event whenever its saved score, level, evidence or thresholds change; closed cases retain their saved evaluation,
 - returns the new policy and the change record (`recomputedCases`).
 
-`GET /api/risk-policy` and `GET /api/risk-policy/history` require a valid access token. No deploy
-or code change is needed to change the rules. Explanation reads use saved evidence and the
-thresholds captured during evaluation, never today's clock or a newer policy.
+An unchanged patch returns `change: null` without rescoring or appending history. During a real
+update, unchanged signal sets retain their evidence IDs; if recalculation changes any signal's
+content or weight, that case's signal set is replaced with new IDs.
+
+`GET /api/risk-policy` and `GET /api/risk-policy/history` require a valid bearer credential.
+No deploy or code change is needed to change weights or score thresholds. Explanation reads
+use saved evidence and the thresholds captured during evaluation, never today's clock or a
+newer policy. Policy-triggered rescoring uses the current time and customer data.
 
 ## Audit hash chain
 
@@ -278,18 +304,19 @@ Each event stores `prevHash` (the previous event's `hash`, or 64 zeros for the f
 hash = sha256(prevHash + canonicalJson({ action, actorId, caseId, createdAt, fromStatus, note, sequence, toStatus }))
 ```
 
-with keys in that fixed order. Each event records server-derived actor ID/name, action, case ID, timestamp, previous/new status and the trimmed note. SQLite triggers reject `UPDATE`/`DELETE`; recursive triggers also prevent `INSERT OR REPLACE` from overwriting history. There are no application routes to insert arbitrary events, edit them, or delete them, including for managers. Case changes and audit appends commit or roll back together.
+with keys in that fixed order. Each event records server-derived actor ID/name, action, subject ID, timestamp, previous/new status and the note (trimmed for user decisions, generated for seed/rescore events). SQLite triggers reject `UPDATE`/`DELETE`; recursive triggers also prevent `INSERT OR REPLACE` from overwriting history. There are no application routes to insert arbitrary events, edit them, or delete them, including for managers. Case changes and audit appends commit or roll back together.
 
 Refunds use the same hash function, substituting `refundId` for `caseId` at the same position in
 canonical JSON. Existing KYC hash input and stored hashes remain unchanged. Refund changes and
 their audit appends also commit or roll back together.
 
-Hash verification detects altered hashed fields and broken links. It cannot detect deletion of the chain tail or a privileged rewrite of the whole database, and the legacy case hash does not cover actor display names. Approval-note changes have a separate hash chain covering actor ID/name/role, reason and complete previous/new policy snapshots. Risk-scoring changes retain a versioned, append-only field-difference history without a hash chain. All histories remain in the operational database; external immutable storage and chain anchoring are production requirements.
+Hash verification detects altered hashed fields and broken links. It cannot detect deletion of the chain tail or a privileged rewrite of the whole database, and case/refund hashes do not cover event IDs or actor display names. Approval-note changes have a separate hash chain covering actor ID/name/role, reason and complete previous/new policy snapshots. Risk-scoring changes retain a versioned, append-only field-difference history without a hash chain. All histories remain in the operational database; external immutable storage and chain anchoring are production requirements.
 
 ## Identity model
 
 All sensitive API reads and writes require `Authorization: Bearer <token>`. Health and the
-explicitly enabled local sign-in/sign-out routes are anonymous.
+explicitly enabled local demo-user discovery and sign-in/sign-out routes are anonymous
+(sign-out revokes the supplied session).
 Credentials contain 32 random bytes encoded as base64url. SQLite stores their SHA-256 hashes,
 identity association and expiry. Revocation deletes the stored hash. Missing, invalid, expired or revoked credentials
 return `401`. The optional `x-analyst-id` is only an expected-identity guard: a mismatch returns

@@ -1,5 +1,9 @@
 # Refund Operations: second-tool implementation report
 
+This report describes the original refund implementation and the shared architecture as it
+exists today. The initial verification results below are historical; use the current commands
+to obtain results for your checkout.
+
 ## Scope and economics
 
 The pre-implementation estimate was one implementation session, approximately 45–75 minutes,
@@ -19,7 +23,7 @@ identity, auditing, interaction components and verification tooling.
 | Capability | Existing code reused or extended |
 | --- | --- |
 | Shell/navigation | `packages/web/src/App.tsx`: two routes and a Refunds entry; same authenticated identity and router |
-| Request identity | `AnalystProvider`, API request helper and `useApi`: selected ID, cancellation, loading, errors and reload |
+| Request identity | `AnalystProvider`, API request helper and `useApi`: server-verified session identity, bearer credentials, expected-identity guard, cancellation, loading, errors and reload |
 | Table/filter patterns | KYC's embedded table, search and pagination extracted to `DataTable`, `SearchInput`, `FilterChips`, `Pagination`; both queues now consume them |
 | Detail interactions | Existing `ActionDialog` accepts a subject label; same validation, submission and error behavior |
 | Audit display | KYC's embedded timeline extracted into `AuditTimeline`; both domains use the same browser verifier |
@@ -60,9 +64,33 @@ Money remains integer cents; amount bands are `< 100000`, `100000–500000` incl
 Dashboard totals cover all refunds, independent of search/filter results. “Today” means UTC and
 uses decision timestamps. Refund approval does not execute a payment.
 
-## Automated verification
+Individual refund amounts are validated as positive safe-integer cents and rendered without
+losing their cent component. The pending total still uses SQLite `SUM` and a JavaScript number:
+totals above `Number.MAX_SAFE_INTEGER` cents (roughly $90 trillion) can lose precision, and
+SQLite's signed 64-bit sum can overflow. This is an accepted prototype limit; production needs
+exact aggregate arithmetic and an API representation that preserves it.
 
-Frontend coverage adds **52 tests**, retaining the existing **55**:
+## Current regression commands
+
+From the repository root:
+
+```bash
+npm test
+npm run lint
+npm run typecheck
+npm run build:web
+```
+
+These cover the API and selected SPA, including later authentication, role-picker, policy and
+exact-cent regressions. Reference UI suites run separately; see the [root README](../README.md#setup-and-run).
+The runner output is the source for current test totals; counts are not line-coverage percentages.
+
+## Verification at the initial refund integration
+
+The following counts and smoke check were recorded when [Refund Operations was first integrated](https://github.com/andreobueno/fde-demo/pull/15).
+They do not describe the current suite size.
+
+Frontend coverage added **52 tests**, retaining the existing **55**:
 
 - 16 API contract tests: explicit identity, cancellation, strict mutation payload, preserved
   server authorization/evidence, and no automatic retry of rejected decisions.
@@ -72,7 +100,7 @@ Frontend coverage adds **52 tests**, retaining the existing **55**:
 - 11 rendering/format tests: exact cents, transaction/evidence display, server-driven action
   availability, terminal states and UTC counter labeling.
 
-Server coverage adds **290 checks** to the existing **1,042**:
+Server coverage added **290 checks** to the existing **1,042**:
 
 - 104 refund-domain checks: roles, risks, amount thresholds, transitions and reason boundaries.
 - 142 HTTP checks: protected reads, forged/extra fields, missing identity, filtering, pagination,
@@ -85,7 +113,7 @@ Server coverage adds **290 checks** to the existing **1,042**:
 - 2 migration checks: old-row/hash preservation, idempotent startup, foreign keys and rollback.
 - 9 additional checks in the existing permission catalog suite.
 
-Integrated result: **1,332 server + 107 web = 1,439 tests passed** across 25 files.
+Historical integrated result: **1,332 server + 107 web = 1,439 tests passed** across 25 files.
 `npm test`, `npm run lint`, `npm run typecheck`, `npm run build:web`, and `git diff --check`
 passed after integrating backend and frontend. Test counts are not a measured line-coverage percentage.
 
@@ -110,7 +138,7 @@ These are automated domain, HTTP and rendering checks; they are not a browser in
 3. **The role model is organization-wide.** Everyone can read both tools. A portfolio needs
    application membership, queue/tenant/field scopes and controlled grants, not simply more broad
    manager powers. Both tools now share token authentication; managed SSO and provisioning remain production work.
-4. **Policy is still domain-specific.** The existing policy editor configures KYC note requirements.
+4. **Policy is still domain-specific.** KYC now has separate approval-note and risk-scoring editors.
    Refund amount/risk limits are prototype constants. A real operation needs versioned refund
    policy and evidence of which policy authorized each decision.
 5. **Contracts are duplicated.** Server and web TypeScript types plus browser/server canonical hash
