@@ -15,6 +15,7 @@ import { hasPermission, permissionsFor, type Permission } from '../domain/author
 import { approvalNoteRequired, policyUpdateSchema } from '../domain/policy.js';
 import { listAnalysts } from '../repo/analysts.js';
 import { authenticateAccessToken } from '../repo/accessTokens.js';
+import { authenticateSession } from '../repo/sessions.js';
 import { CASE_SORTS, caseStats, getCase, getCaseRiskThresholds, listCases } from '../repo/cases.js';
 import { getCustomer } from '../repo/customers.js';
 import { listAuditEvents } from '../repo/audit.js';
@@ -26,6 +27,7 @@ import { getPolicy, listPolicyAuditEvents } from '../repo/policy.js';
 import { getRiskPolicyView, updateRiskPolicy } from '../services/riskPolicyService.js';
 import type { Analyst } from '../types.js';
 import { refundRoutes } from './refunds.js';
+import { authRoutes, BEARER_PATTERN } from './auth.js';
 
 declare module 'express-serve-static-core' {
   interface Request {
@@ -60,7 +62,13 @@ function securityHeaders(_req: Request, res: Response, next: NextFunction): void
   next();
 }
 
-export function createApp(db: Db): Express {
+export function createApp(
+  db: Db,
+  { localAuth = process.env.LOCAL_DEMO_AUTH === 'true' }: { localAuth?: boolean } = {},
+): Express {
+  if (localAuth && process.env.NODE_ENV === 'production') {
+    throw new Error('Local demo authentication is not permitted in production.');
+  }
   const app = express();
   app.disable('x-powered-by');
   app.use(securityHeaders);
@@ -69,8 +77,10 @@ export function createApp(db: Db): Express {
   }));
 
   const resolveAnalyst = (req: Request, _res: Response, next: NextFunction) => {
-    const credential = /^Bearer ([A-Za-z0-9_-]{43})$/i.exec(req.header('authorization') ?? '');
-    const analyst = credential?.[1] ? authenticateAccessToken(db, credential[1]) : null;
+    const token = BEARER_PATTERN.exec(req.header('authorization') ?? '')?.[1];
+    const analyst = token
+      ? (localAuth ? authenticateSession(db, token) : null) ?? authenticateAccessToken(db, token)
+      : null;
     if (!analyst) return next(unauthorized('Authentication required.'));
     const expectedId = req.header('x-analyst-id');
     if (expectedId !== undefined && expectedId !== analyst.id) {
@@ -93,6 +103,7 @@ export function createApp(db: Db): Express {
     res.json({ ok: true });
   });
 
+  if (localAuth) app.use('/api/auth', authRoutes(db));
   app.use('/api', resolveAnalyst);
   app.use(express.json({ limit: '50kb' }));
   app.use('/api/refunds', refundRoutes(db, requirePermission));

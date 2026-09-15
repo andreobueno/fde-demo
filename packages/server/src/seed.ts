@@ -3,6 +3,7 @@ import { openDb } from './db.js';
 import { schemaSql } from './schema.js';
 import { migrateRefundAudit } from './migrations.js';
 import { seedRefunds } from './seedRefunds.js';
+import { DEMO_PASSWORD, seedDemoLogins } from './seedLogins.js';
 import { insertAuditEvent } from './repo/audit.js';
 import { computeRisk } from './domain/risk.js';
 import { computeEventHash, GENESIS_HASH } from './domain/audit.js';
@@ -92,11 +93,15 @@ const REVIEW_NOTES = [
   'Review started; awaiting sanctions re-screen result.',
 ];
 
+if (process.env.NODE_ENV === 'production') {
+  throw new Error('The fictional demo database cannot be seeded in production.');
+}
 const db = openDb();
 
 function resetSchema() {
   db.exec('PRAGMA foreign_keys = OFF;');
   for (const t of [
+    'sessions', 'analyst_credentials', 'auth_events',
     'access_tokens', 'policy_audit_events', 'review_policy', 'refunds', 'case_risk_thresholds',
     'audit_events', 'risk_signals', 'cases', 'customers', 'analysts',
     'risk_policy', 'risk_policy_changes',
@@ -294,6 +299,7 @@ function seed() {
   });
   run();
   seedRefunds(db, now);
+  const logins = seedDemoLogins(db, { now });
 
   const counts = db
     .prepare('SELECT status, COUNT(*) AS n FROM cases GROUP BY status ORDER BY status')
@@ -304,6 +310,10 @@ function seed() {
   console.log('Seeded KYC demo database.');
   console.log('  cases by status:', JSON.stringify(counts));
   console.log('  cases by risk_level:', JSON.stringify(risk));
+  console.log(`  demo logins (password ${DEMO_PASSWORD}):`);
+  for (const login of logins) {
+    console.log(`    ${login.email}  ${login.role}`);
+  }
 }
 
 seed();
