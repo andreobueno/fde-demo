@@ -59,7 +59,7 @@ export function ManualIdentityForm() {
           >
             {DEMO_USERS.map((user) => (
               <option key={user.id} value={user.id}>
-                {user.label} — {user.name}
+                {user.label}
               </option>
             ))}
           </select>

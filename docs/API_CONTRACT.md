@@ -1,6 +1,6 @@
 # KYC Review Console — API contract (v1)
 
-Backend: Express + better-sqlite3, TypeScript. Base URL `http://localhost:4000`.
+Backend: Express + better-sqlite3, TypeScript. Base URL `http://127.0.0.1:4000`.
 All responses JSON except `204` sign-out. Errors: `{ "error": { "code": string, "message": string, "details"?: unknown } }` with 400/401/403/404/409/429/500. Responses use `Cache-Control: no-store`.
 
 ## Authentication and identity
@@ -18,6 +18,9 @@ CORS `OPTIONS` preflight returns protocol headers only; the subsequent data/acti
   return `400 VALIDATION_ERROR`. Login failures are limited per email (8) and connection IP (64)
   in a 15-minute window; further attempts return `429 TOO_MANY_ATTEMPTS`. Limits are in-process
   and reset on API restart. Reverse proxies share the source limit; forwarded IP headers are not trusted.
+- `GET /api/auth/demo-users`: returns one available fictional credential mapping per role-picker
+  choice as `[{id, name, email}]`. This lets the local picker follow credentials created for a
+  retained database. It returns no password, hash, permissions or authenticated identity.
 - `POST /api/auth/sign-out`: bearer session token, no body. Returns `204`, deletes only that
   session hash. Missing, expired or already revoked credentials are accepted idempotently.
   Other sessions (including another login for the same analyst) remain valid. Automation

@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "LOCAL_DEMO_AUTH=true tsx watch src/index.ts",
+    "dev": "HOST=127.0.0.1 LOCAL_DEMO_AUTH=true tsx watch src/index.ts",
     "start": "tsx src/index.ts",
     "seed": "tsx src/seed.ts",
     "seed:refunds": "tsx src/seedRefundsCli.ts",

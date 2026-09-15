@@ -210,6 +210,8 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 
 CREATE INDEX IF NOT EXISTS sessions_analyst_id ON sessions(analyst_id);
+CREATE INDEX IF NOT EXISTS sessions_expires_at ON sessions(expires_at);
+CREATE INDEX IF NOT EXISTS sessions_last_used_at ON sessions(last_used_at);
 
 CREATE TABLE IF NOT EXISTS auth_events (
   id TEXT PRIMARY KEY,

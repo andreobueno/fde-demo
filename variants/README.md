@@ -15,7 +15,7 @@ against the same backend (`packages/server`, contract in `docs/API_CONTRACT.md`)
 
 ```sh
 npm install              # at repo root — installs all workspaces incl. variants/*
-npm run seed && npm run dev:server    # API on http://localhost:4000
+npm run seed && npm run dev:server    # API on http://127.0.0.1:4000
 
 npm run dev:web-b        # web-b on http://localhost:5173
 npm run dev:local -w variants/web-c    # web-c, explicit local HTTP on port 3000

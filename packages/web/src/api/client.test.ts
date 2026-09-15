@@ -80,7 +80,7 @@ describe('authenticated identity on every API request', () => {
         headers: { 'content-type': 'application/json', Authorization: `Bearer ${token}`, 'x-analyst-id': id },
         body: method === 'GET' ? null : expect.any(String),
         signal: expect.any(AbortSignal),
-        credentials: 'omit',
+        credentials: 'same-origin',
         redirect: 'error',
       });
     }

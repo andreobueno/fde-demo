@@ -11,7 +11,7 @@ dialog and the post-action refresh; every interaction also works as a plain form
 npm install                 # repo root
 npm run seed                # populate packages/server/data/kyc.db
 # Existing DB instead: npm run seed:logins (resets passwords/sessions, preserves business data)
-npm run dev:server          # API on http://localhost:4000
+npm run dev:server          # API on http://127.0.0.1:4000
 npm run dev:local -w variants/web-c  # explicit local HTTP opt-in on http://localhost:3000
 PORT=3001 npm run dev:local -w variants/web-c  # independent second console
 ```

@@ -31,23 +31,27 @@ Every sensitive API route requires an authenticated credential. Case and policy 
 
 The local development adapter replaces browser token entry with email/password sign-in. The
 selected SPA hides those fictional credentials behind an Analyst / Reviewer / Admin picker.
-The client maps the label to a seeded account, then verifies the issued session through `/api/me`
-before installing it. A failed verification requests revocation of the new session. The API never
+The client loads the current seeded credential mapping from the enabled local adapter, maps the
+label to an account, then verifies the issued session through `/api/me` before installing it. A
+failed verification requests revocation of the new session. The API never
 accepts the selected label, role or analyst ID as authentication; current database identity and
 permissions remain authoritative.
 `LOCAL_DEMO_AUTH=true` is explicit in the API dev script; ordinary startup disables it.
 Production rejects enabling it and rejects demo seeding. Disabled adapters do not accept
 previously issued demo sessions. The shared seeded password is intentionally public, for
-fictional role evaluation only. Do not expose this adapter to untrusted networks.
+fictional role evaluation only. The development command binds the API to the loopback interface.
+Do not expose this adapter to untrusted networks.
 
 Password hashes use salted scrypt (`N=16384, r=8, p=1`); unknown users incur dummy verification.
+Stored hashes are rejected before scrypt when their parameters exceed the supported work factor.
 Failures return the same message regardless of account existence. In-process rate limits apply
 per email and connection IP, with bounded state; these are not distributed production controls.
 Password verification is synchronous and suitable only for the local demo workload.
 
 Sign-in issues 32 random bytes, stores only a SHA-256 session hash, and associates it with an
 analyst. Sessions end after one idle hour or 12 hours total. Sign-out revokes only the current
-session. Successful sign-in/out and their audit writes are atomic. A separate append-only
+session. Each new sign-in also removes a bounded batch of abandoned expired/idle session rows.
+Successful sign-in/out and their audit writes are atomic. A separate append-only
 `auth_events` table records success, failure, throttling and logout without raw passwords/tokens.
 These events have no public mutation or read endpoint; they are available to database administrators.
 Session inactivity expiry and administrative reseeding are not separately audited.
@@ -63,6 +67,10 @@ CORS preflight returns headers only without credentials, allowing browsers to ma
 Missing, malformed, unknown, expired or revoked tokens receive a generic `401`. Directory access
 also requires authentication; directory entries cannot grant a caller access to those identities.
 Current roles are loaded from SQLite, so a role change takes effect without reissuing a token.
+
+The selected SPA preserves same-origin cookies for authenticated preview/reverse-proxy access.
+The API ignores cookies when resolving application identity and still requires its bearer token.
+Fetch redirects remain disabled.
 
 The selected SPA and reference SPA require verified sign-in before loading sensitive pages and
 keep session tokens in `sessionStorage`. It isolates browser tabs and origins (including ports)

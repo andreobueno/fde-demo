@@ -1,5 +1,6 @@
 import type { Db } from '../db.js';
 import { hashPassword, type ScryptParameters } from '../domain/password.js';
+import type { AnalystRole } from '../types.js';
 
 export interface AnalystCredential {
   analystId: string;
@@ -11,6 +12,20 @@ interface CredentialRow {
   analyst_id: string;
   email: string;
   password_hash: string;
+}
+
+interface DemoCredentialRow {
+  analyst_id: string;
+  name: string;
+  role: AnalystRole;
+  email: string;
+}
+
+export interface DemoCredential {
+  analystId: string;
+  name: string;
+  role: AnalystRole;
+  email: string;
 }
 
 export function normaliseEmail(email: string): string {
@@ -33,6 +48,27 @@ export function findCredentialByAnalyst(db: Db, analystId: string): AnalystCrede
     .prepare<[string], CredentialRow>('SELECT * FROM analyst_credentials WHERE analyst_id = ?')
     .get(analystId);
   return row ? toCredential(row) : null;
+}
+
+export function listDemoCredentials(db: Db): DemoCredential[] {
+  return db.prepare(`
+    SELECT
+      analysts.id AS analyst_id,
+      analysts.name,
+      analysts.role,
+      analyst_credentials.email
+    FROM analyst_credentials
+    JOIN analysts ON analysts.id = analyst_credentials.analyst_id
+    ORDER BY analysts.id
+  `).all().map((row) => {
+    const credential = row as DemoCredentialRow;
+    return {
+      analystId: credential.analyst_id,
+      name: credential.name,
+      role: credential.role,
+      email: credential.email,
+    };
+  });
 }
 
 export function setAnalystPassword(

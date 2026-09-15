@@ -28,4 +28,20 @@ describe('password hashing', () => {
     expect(verifyPassword('correct-horse-battery', encoded.slice(0, -4))).toBe(false);
     expect(verifyPassword('correct-horse-battery', encoded.replace('scrypt', 'md5'))).toBe(false);
   });
+
+  it('rejects stored parameters that exceed the supported work factor', () => {
+    const encoded = hashPassword('correct-horse-battery', parameters);
+    expect(verifyPassword(
+      'correct-horse-battery',
+      encoded.replace('scrypt$1024$8$1$', 'scrypt$1073741824$8$1$'),
+    )).toBe(false);
+    expect(verifyPassword(
+      'correct-horse-battery',
+      encoded.replace('scrypt$1024$8$1$', 'scrypt$1024$1024$1$'),
+    )).toBe(false);
+    expect(verifyPassword(
+      'correct-horse-battery',
+      encoded.replace('scrypt$1024$8$1$', 'scrypt$1024$8$1024$'),
+    )).toBe(false);
+  });
 });

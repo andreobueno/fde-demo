@@ -7,7 +7,7 @@ Backend for the KYC Review Console prototype. Express + better-sqlite3, implemen
 ```bash
 npm install          # at repo root (npm workspaces)
 npm run seed         # drop + recreate + populate packages/server/data/kyc.db (deterministic)
-npm run dev:server   # start API on http://localhost:4000 (PORT env to override)
+npm run dev:server   # start API on http://127.0.0.1:4000 (PORT env to override)
 ```
 
 ## Test / checks
