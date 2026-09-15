@@ -28,6 +28,7 @@ export function Layout({ title, currentAnalyst, toast, children }: LayoutProps) 
           </a>
           {currentAnalyst ? (
             <form className="analyst-switcher" method="post" action="/sign-out">
+              <input type="hidden" name="expectedAnalystId" value={currentAnalyst.id} />
               <span>Signed in as {currentAnalyst.name} ({humanise(currentAnalyst.role)})</span>
               <span className="muted analyst-id">{currentAnalyst.id}</span>
               <button type="submit" className="btn btn-small">Sign out / switch user</button>
@@ -44,19 +45,32 @@ export function Layout({ title, currentAnalyst, toast, children }: LayoutProps) 
   );
 }
 
-export function SignIn({ error }: { error: string | null }) {
+export function SignIn({ error, localDemo = false }: { error: string | null; localDemo?: boolean }) {
   return (
     <section className="panel">
       <h1>Sign in</h1>
-      <p>Use an access token issued to you by an administrator. Tokens expire after eight hours and can be revoked.</p>
+      <p>Enter your work email and password to access the review console.</p>
       {error ? <p className="form-error" role="alert">{error}</p> : null}
-      <form method="post" action="/sign-in" autoComplete="off">
-        <label htmlFor="access-token">Access token</label>
-        <input id="access-token" name="accessToken" type="password" required
-          minLength={43} maxLength={43} pattern="[A-Za-z0-9_-]{43}" autoComplete="off" spellCheck={false} />
+      <form className="sign-in-form" method="post" action="/sign-in">
+        <label htmlFor="email">Email</label>
+        <input id="email" name="email" type="email" required maxLength={254}
+          autoComplete="username" autoCapitalize="none" spellCheck={false} />
+        <label htmlFor="password">Password</label>
+        <input id="password" name="password" type="password" required maxLength={256} autoComplete="current-password" />
         <button type="submit" className="btn btn-primary">Sign in</button>
       </form>
-      <p className="muted">Signing out clears this browser’s credential. Ask an administrator to revoke the token.</p>
+      <p className="muted">Signing out ends this session. Other signed-in sessions stay active.</p>
+      {localDemo ? (
+        <details>
+          <summary>Public local demo credentials</summary>
+          <p>Fictional users for local testing only. Shared password: <code>demo-password-2026</code>.</p>
+          <ul>
+            <li>grete.lindholm@northwind-demo.example — Analyst</li>
+            <li>marta.ellison@northwind-demo.example — Senior analyst</li>
+            <li>sofia.chen@northwind-demo.example — Compliance manager</li>
+          </ul>
+        </details>
+      ) : null}
     </section>
   );
 }

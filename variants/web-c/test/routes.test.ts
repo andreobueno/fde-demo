@@ -2,7 +2,7 @@ import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApiClient } from '../src/api/client.js';
 import type { FetchLike } from '../src/api/client.js';
-import type { ActionResponse, Analyst, AuditEvent, CaseDetail, CaseStats, KycCase, RiskExplanation } from '../src/api/types.js';
+import type { ActionResponse, Analyst, AuditEvent, CaseDetail, CaseStats, KycCase, RiskExplanation, SignInResponse } from '../src/api/types.js';
 import { createApp } from '../src/app.js';
 import fixture from './fixtures-audit.json' with { type: 'json' };
 
@@ -19,9 +19,26 @@ const tokens: Record<string, string> = {
 };
 const managerToken = tokens['ana-006']!;
 const unknownToken = Buffer.alloc(32, 9).toString('base64url');
+const password = 'test-password-with-spaces ';
 
-function authCookie(token = managerToken) {
-  return `kyc_access_token=${token}`;
+function credentials(analystId = 'ana-006') {
+  const analyst = analysts.find((entry) => entry.id === analystId)!;
+  return { email: `${analyst.name.toLowerCase().replaceAll(' ', '.')}@northwind-demo.example`, password };
+}
+
+function issuedSession(analyst: Analyst): SignInResponse {
+  return {
+    analyst: { ...analyst, permissions: ['cases:read'] },
+    session: {
+      token: tokens[analyst.id]!,
+      expiresAt: new Date(Date.now() + 12 * 60 * 60 * 1000).toISOString(),
+      idleTimeoutMs: 60 * 60 * 1000,
+    },
+  };
+}
+
+function authCookie(token = managerToken, port = 3000) {
+  return `kyc_session_${port}=${token}`;
 }
 
 function authenticated(app: ReturnType<typeof createApp>) {
@@ -30,6 +47,10 @@ function authenticated(app: ReturnType<typeof createApp>) {
 
 beforeEach(() => {
   vi.stubEnv('ALLOW_INSECURE_LOCAL_AUTH', 'false');
+  vi.stubEnv('LOCAL_DEMO_AUTH', 'false');
+  vi.stubEnv('PORT', '3000');
+  vi.stubEnv('SESSION_COOKIE_NAME', undefined);
+  vi.spyOn(Date, 'now').mockReturnValue(Date.now());
 });
 
 afterEach(() => {
@@ -125,17 +146,30 @@ interface StubOptions {
 
 function buildApp(opts: StubOptions = {}) {
   const calls: Call[] = [];
+  const revokedTokens: string[] = [];
   const fetchStub: FetchLike = async (url, init) => {
     calls.push({ url, init });
     if (opts.unreachable) throw new TypeError('fetch failed');
     const response = opts.response?.({ url, init });
     if (response) return response;
+    const { pathname } = new URL(url);
+    if (pathname === '/api/auth/sign-in' && init?.method === 'POST') {
+      const body = JSON.parse(String(init.body)) as { email: string; password: string };
+      const analyst = analysts.find((entry) => credentials(entry.id).email === body.email);
+      if (!analyst || body.password !== password) {
+        return json({ error: { code: 'INVALID_CREDENTIALS', message: 'Incorrect email or password.' } }, 401);
+      }
+      return json(issuedSession(analyst), 201);
+    }
     const authorization = new Headers(init?.headers).get('authorization');
     const analyst = analysts.find((entry) => authorization === `Bearer ${tokens[entry.id]}`);
-    if (!analyst || opts.rejectedTokens?.includes(tokens[analyst.id]!)) {
+    if (pathname === '/api/auth/sign-out' && init?.method === 'POST') {
+      if (analyst) revokedTokens.push(tokens[analyst.id]!);
+      return new Response(null, { status: 204 });
+    }
+    if (!analyst || opts.rejectedTokens?.includes(tokens[analyst.id]!) || revokedTokens.includes(tokens[analyst.id]!)) {
       return json({ error: { code: 'UNAUTHORIZED', message: 'Invalid credential.' } }, 401);
     }
-    const { pathname } = new URL(url);
     if (pathname === '/api/me') return json({ ...analyst, permissions: ['cases:read'] });
     if (pathname === '/api/analysts') return json(analysts);
     if (pathname === '/api/cases/stats') return json(stats);
@@ -298,7 +332,7 @@ describe('POST /cases/:id/actions/:action', () => {
     expect(post!.url).toBe('http://api.test/api/cases/case-006/actions');
     const headers = post!.init!.headers as Record<string, string>;
     expect(headers.authorization).toBe(`Bearer ${managerToken}`);
-    expect(headers['x-analyst-id']).toBeUndefined();
+    expect(headers['x-analyst-id']).toBe('ana-006');
     expect(JSON.parse(post!.init!.body as string)).toEqual({ action: 'approve', note: 'Documents verified in person.' });
     expect(res.text).toContain('id="case-main"');
     expect(res.text).toContain('Case approved.');
@@ -488,19 +522,26 @@ describe.each([true, false])('policy-aware action forms (htmx: %s)', (isHx) => {
   });
 });
 
-describe('Access token sign-in', () => {
+describe('Email and password sign-in', () => {
   it('offers a public password form without fetching a directory or embedding credentials', async () => {
     const { app, calls } = buildApp();
     const res = await request(app).get('/sign-in').set('Cookie', authCookie()).expect(200);
     expect(calls).toHaveLength(0);
     expect(res.text).toMatch(/<form[^>]*action="\/sign-in"[^>]*method="post"/);
-    const input = res.text.match(/<input[^>]*name="accessToken"[^>]*>/)?.[0];
+    const email = res.text.match(/<input[^>]*name="email"[^>]*>/)?.[0];
+    expect(email).toContain('type="email"');
+    expect(email).toContain('autoComplete="username"');
+    expect(email).toContain('maxLength="254"');
+    const input = res.text.match(/<input[^>]*name="password"[^>]*>/)?.[0];
     expect(input).toContain('type="password"');
     expect(input).toContain('required=""');
-    expect(input).toContain('minLength="43"');
-    expect(input).toContain('maxLength="43"');
+    expect(input).toContain('maxLength="256"');
     expect(input).not.toContain('value=');
-    expect(res.text).toContain('autoComplete="off"');
+    expect(input).toContain('autoComplete="current-password"');
+    expect(res.text).not.toContain('accessToken');
+    expect(res.text).not.toContain('Access token');
+    expect(res.text).not.toContain(password);
+    expect(res.text).not.toContain('demo-password-2026');
     expect(res.text).not.toContain(managerToken);
     expect(res.text).not.toContain('name="analystId"');
     expect(res.text).not.toContain('Signed in as');
@@ -512,25 +553,31 @@ describe('Access token sign-in', () => {
     expect(res.headers['x-powered-by']).toBeUndefined();
   });
 
-  it.each(['ana-001', 'ana-003', 'ana-006'])('verifies %s with /api/me before storing a secure credential', async (analystId) => {
+  it.each(['ana-001', 'ana-003', 'ana-006'])('exchanges credentials for %s server-side before storing a secure session', async (analystId) => {
     const { app, calls } = buildApp();
     const token = tokens[analystId]!;
     const res = await request(app).post('/sign-in').set('Host', 'web.test').set('Origin', 'https://web.test')
-      .type('form').send({ accessToken: token, analystId: 'ana-006', returnTo: '//evil.test' }).expect(303);
+      .type('form').send({
+        ...credentials(analystId), email: ` ${credentials(analystId).email.toUpperCase()} `,
+        analystId: 'ana-006', role: 'compliance_manager', returnTo: '//evil.test',
+      }).expect(303);
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.url).toBe('http://api.test/api/me');
-    expect(new Headers(calls[0]?.init?.headers).get('authorization')).toBe(`Bearer ${token}`);
+    expect(calls[0]?.url).toBe('http://api.test/api/auth/sign-in');
+    expect(calls[0]?.init?.method).toBe('POST');
+    expect(new Headers(calls[0]?.init?.headers).has('authorization')).toBe(false);
+    expect(new Headers(calls[0]?.init?.headers).get('content-type')).toBe('application/json');
     expect(new Headers(calls[0]?.init?.headers).has('x-analyst-id')).toBe(false);
-    expect(calls[0]?.init?.body).toBeUndefined();
+    expect(JSON.parse(String(calls[0]?.init?.body))).toEqual(credentials(analystId));
     expect(res.headers.location).toBe('/');
     expect(res.text).not.toContain(token);
+    expect(res.text).not.toContain(password);
     const cookies: string[] = res.get('Set-Cookie') ?? [];
     const cookie = cookies.find((value) => value.startsWith(authCookie(token)));
     expect(cookie).toContain('HttpOnly');
     expect(cookie).toContain('Secure');
     expect(cookie).toContain('SameSite=Strict');
     expect(cookie).toContain('Path=/');
-    expect(cookie).toContain('Max-Age=28800');
+    expect(cookie).toContain('Max-Age=43200');
     expect(cookie).not.toContain('Domain=');
     expect(cookies).toContainEqual(expect.stringContaining('analyst_id=;'));
   });
@@ -555,45 +602,61 @@ describe('Access token sign-in', () => {
     expect(calls.every((call) => !new Headers(call.init?.headers).has('x-analyst-id'))).toBe(true);
   });
 
-  it.each(['', 'ana-006', 'a'.repeat(42), 'a'.repeat(44), '!'.repeat(43)])('rejects malformed token %s without contacting the API', async (accessToken) => {
+  it.each([
+    {}, { email: 'not-email', password }, { email: ['one@example.test', 'two@example.test'], password },
+    { email: 'a'.repeat(255), password }, { email: credentials().email, password: '' },
+    { email: credentials().email, password: 'a'.repeat(257) },
+    { email: credentials().email, password: ['one', 'two'] },
+    { accessToken: managerToken, analystId: 'ana-006' },
+  ])('rejects invalid or token-only sign-in payloads without contacting the API: %j', async (body) => {
     const { app, calls } = buildApp();
-    const res = await authenticated(app).post('/sign-in').type('form').send({ accessToken, analystId: 'ana-006' }).expect(401);
+    const res = await authenticated(app).post('/sign-in').type('form').send(body).expect(400);
     expect(calls).toHaveLength(0);
-    expect(res.text).toContain('Sign in with a valid access token.');
+    expect(res.text).toContain('Enter a valid email address and password.');
     expect(res.text).not.toContain('value=');
-    expect(res.get('Set-Cookie')).toContainEqual(expect.stringContaining('kyc_access_token=;'));
+    expect(res.get('Set-Cookie')).toContainEqual(expect.stringContaining('kyc_session_3000=;'));
     expect(res.headers.location).toBeUndefined();
   });
 
-  it.each(['invalid', 'expired', 'revoked'])('rejects a syntactically valid %s credential and clears the old session', async (reason) => {
+  it.each([
+    { status: 400, message: 'Enter a valid email address and password.' },
+    { status: 401, message: 'Incorrect email or password.' },
+    { status: 429, message: 'Too many sign-in attempts. Try again later.' },
+  ])('renders a safe sign-in error for API $status and clears the old session', async ({ status, message }) => {
     const { app, calls } = buildApp({
-      response: () => json({ error: { code: 'UNAUTHORIZED', message: `${reason}: ${unknownToken}` } }, 401),
+      response: () => json({ error: { code: 'ERROR', message: `Private detail: ${unknownToken} ${password}` } }, status),
     });
-    const res = await authenticated(app).post('/sign-in').type('form').send({ accessToken: unknownToken }).expect(401);
+    const res = await authenticated(app).post('/sign-in').type('form').send(credentials()).expect(status);
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.url).toBe('http://api.test/api/me');
-    expect(res.text).toContain('Sign in with a valid access token.');
+    expect(calls[0]?.url).toBe('http://api.test/api/auth/sign-in');
+    expect(res.text).toContain(message);
+    expect(res.text).toContain('name="password"');
+    expect(res.text).not.toContain(password);
     expect(res.text).not.toContain(unknownToken);
     expect(res.text).not.toContain(managerToken);
-    expect(res.text).not.toContain(`${reason}:`);
-    expect(res.get('Set-Cookie')).toContainEqual(expect.stringContaining('kyc_access_token=;'));
+    expect(res.text).not.toContain('Private detail:');
+    expect(res.get('Set-Cookie')).toContainEqual(expect.stringContaining('kyc_session_3000=;'));
     expect(res.get('Set-Cookie')?.join(';')).not.toContain(unknownToken);
   });
 
-  it('does not keep the old credential when validation is unavailable', async () => {
+  it('clears the old session and offers sign-in recovery when the API is unavailable', async () => {
     const { app, calls } = buildApp({ unreachable: true });
-    const res = await authenticated(app).post('/sign-in').type('form').send({ accessToken: unknownToken }).expect(502);
+    const res = await authenticated(app).post('/sign-in').type('form').send(credentials()).expect(502);
     expect(calls).toHaveLength(1);
-    expect(res.get('Set-Cookie')).toContainEqual(expect.stringContaining('kyc_access_token=;'));
+    expect(res.get('Set-Cookie')).toContainEqual(expect.stringContaining('kyc_session_3000=;'));
     expect(res.text).not.toContain(unknownToken);
     expect(res.text).not.toContain(managerToken);
+    expect(res.text).not.toContain(password);
+    expect(res.text).toContain('Sign-in is unavailable right now. Please try again.');
+    expect(res.text).toContain('name="email"');
+    expect(res.text).toContain('name="password"');
   });
 
   it('cannot authenticate by submitting an analyst ID to either sign-in or the removed switch route', async () => {
     const { app, calls } = buildApp();
     for (const path of ['/sign-in', '/switch-analyst']) {
       const res = await request(app).post(path).set('Host', 'web.test').set('Origin', 'https://web.test')
-        .set('Cookie', 'analyst_id=ana-006').type('form').send({ analystId: 'ana-006' }).expect(401);
+        .set('Cookie', 'analyst_id=ana-006').type('form').send({ analystId: 'ana-006' }).expect(path === '/sign-in' ? 400 : 401);
       expect(res.get('Set-Cookie')?.join(';')).not.toContain('analyst_id=ana-006');
       expect(res.text).toContain('<h1>Sign in</h1>');
     }
@@ -605,9 +668,104 @@ describe('Access token sign-in', () => {
   it('uses a full-page redirect for htmx sign-in', async () => {
     const { app } = buildApp();
     const res = await authenticated(app).post('/sign-in').set('HX-Request', 'true')
-      .type('form').send({ accessToken: tokens['ana-003'] }).expect(204);
+      .type('form').send(credentials('ana-003')).expect(204);
     expect(res.headers['hx-redirect']).toBe('/');
     expect(res.text).toBe('');
+  });
+
+  it.each([
+    { status: 400, notice: 'validation', message: 'Enter a valid email address and password.' },
+    { status: 401, notice: 'invalid-credentials', message: 'Incorrect email or password.' },
+    { status: 429, notice: 'throttled', message: 'Too many sign-in attempts.' },
+    { status: 500, notice: 'unavailable', message: 'Sign-in is unavailable' },
+  ])('preserves API $status feedback after an htmx full-page redirect', async ({ status, notice, message }) => {
+    const { app } = buildApp({ response: () => new Response(password, { status }) });
+    const res = await authenticated(app).post('/sign-in').set('HX-Request', 'true')
+      .type('form').send(credentials()).expect(status === 500 ? 502 : status);
+    expect(res.text).toBe('');
+    expect(res.headers['hx-redirect']).toBe(`/sign-in?notice=${notice}`);
+    const page = await request(app).get(`/sign-in?notice=${notice}`).expect(200);
+    expect(page.text).toContain(message);
+    expect(page.text).toContain('name="password"');
+    expect(page.text).not.toContain(password);
+  });
+
+  it.each(['missing-email@northwind-demo.example', 'sofia.chen@northwind-demo.example'])(
+    'uses the same message for unknown accounts and incorrect passwords (%s)', async (email) => {
+      const { app } = buildApp();
+      const res = await authenticated(app).post('/sign-in').type('form')
+        .send({ email, password: 'incorrect-password' }).expect(401);
+      expect(res.text).toContain('Incorrect email or password.');
+      expect(res.text).not.toContain('incorrect-password');
+      expect(res.text).not.toContain(email);
+    },
+  );
+
+  it.each([
+    null, {}, { analyst: analysts[0] },
+    { session: { token: managerToken, expiresAt: 'invalid', idleTimeoutMs: 1000 } },
+  ])('fails closed on incomplete session responses: %j', async (body) => {
+    const { app } = buildApp({ response: () => json(body, 201) });
+    const res = await authenticated(app).post('/sign-in').type('form').send(credentials()).expect(502);
+    expect(res.text).toContain('Sign-in is unavailable');
+    expect(res.text).not.toContain(managerToken);
+    expect(res.get('Set-Cookie')?.join(';')).not.toContain(managerToken);
+  });
+
+  it.each([
+    { token: '' }, { token: '!'.repeat(43) }, { token: 'a'.repeat(42) },
+    { expiresAt: 'invalid' }, { expiresAt: '2020-01-01T00:00:00.000Z' },
+    { idleTimeoutMs: 0 }, { idleTimeoutMs: -1 }, { idleTimeoutMs: '3600000' }, { idleTimeoutMs: 1.5 },
+  ])('rejects invalid session fields: %j', async (session) => {
+    const issued = issuedSession(analysts[2]!);
+    const { app } = buildApp({ response: () => json({ ...issued, session: { ...issued.session, ...session } }, 201) });
+    const res = await authenticated(app).post('/sign-in').type('form').send(credentials()).expect(502);
+    expect(res.get('Set-Cookie')?.join(';')).not.toContain(managerToken);
+    expect(res.text).not.toContain(managerToken);
+  });
+
+  it.each([null, {}, { ...analysts[2], permissions: null }, { ...analysts[2], permissions: [null] },
+    { ...analysts[2], role: 'admin', permissions: [] }])('rejects malformed authoritative actors: %j', async (analyst) => {
+    const { app, calls } = buildApp({
+      response: ({ url }) => url.endsWith('/api/me') ? json(analyst) : undefined,
+    });
+    const res = await authenticated(app).get('/').expect(401);
+    expect(calls).toHaveLength(1);
+    expect(res.text).not.toContain('Priya Holloway');
+    expect(res.get('Set-Cookie')).toContainEqual(expect.stringContaining('kyc_session_3000=;'));
+    const login = buildApp({
+      response: () => json({ ...issuedSession(analysts[2]!), analyst }, 201),
+    });
+    const failed = await authenticated(login.app).post('/sign-in').type('form').send(credentials()).expect(502);
+    expect(failed.get('Set-Cookie')?.join(';')).not.toContain(managerToken);
+  });
+
+  it.each([200, 204])('requires HTTP 201 from sign-in rather than accepting %s', async (status) => {
+    const { app } = buildApp({
+      response: () => status === 204 ? new Response(null, { status }) : json(issuedSession(analysts[2]!), status),
+    });
+    const res = await authenticated(app).post('/sign-in').type('form').send(credentials()).expect(502);
+    expect(res.get('Set-Cookie')?.join(';')).not.toContain(managerToken);
+  });
+
+  it('uses the API absolute expiry rather than a fixed cookie lifetime or idle window', async () => {
+    const issued = issuedSession(analysts[2]!);
+    issued.session.expiresAt = new Date(Date.now() + 90 * 60 * 1000).toISOString();
+    issued.session.idleTimeoutMs = 10 * 60 * 1000;
+    const { app } = buildApp({ response: () => json(issued, 201) });
+    const res = await authenticated(app).post('/sign-in').type('form').send(credentials()).expect(303);
+    expect(res.get('Set-Cookie')?.find((cookie) => cookie.startsWith(authCookie()))).toContain('Max-Age=5400');
+  });
+
+  it('shows public fictional credential help only for explicit local demo mode', async () => {
+    vi.stubEnv('LOCAL_DEMO_AUTH', 'true');
+    const { app } = buildApp();
+    const res = await request(app).get('/sign-in').expect(200);
+    expect(res.text).toContain('Public local demo credentials');
+    expect(res.text).toContain('demo-password-2026');
+    for (const analyst of analysts) expect(res.text).toContain(credentials(analyst.id).email);
+    vi.stubEnv('NODE_ENV', 'production');
+    expect(() => buildApp()).toThrow('LOCAL_DEMO_AUTH is not permitted in production.');
   });
 });
 
@@ -625,7 +783,7 @@ describe('Credential expiry and sign-out', () => {
     expect(res.text).not.toContain('Priya Holloway');
     expect(res.text).not.toContain('Signed in as');
     expect(res.text).not.toContain(managerToken);
-    expect(res.get('Set-Cookie')).toContainEqual(expect.stringContaining('kyc_access_token=;'));
+    expect(res.get('Set-Cookie')).toContainEqual(expect.stringContaining('kyc_session_3000=;'));
   });
 
   it.each([
@@ -640,7 +798,7 @@ describe('Credential expiry and sign-out', () => {
     expect(res.text).toContain('<h1>Sign in</h1>');
     expect(res.text).not.toContain('Priya Holloway');
     expect(calls.every((call) => new Headers(call.init?.headers).get('authorization') === `Bearer ${managerToken}`)).toBe(true);
-    expect(res.get('Set-Cookie')).toContainEqual(expect.stringContaining('kyc_access_token=;'));
+    expect(res.get('Set-Cookie')).toContainEqual(expect.stringContaining('kyc_session_3000=;'));
   });
 
   it.each([false, true])('never retries an unauthorized mutation (htmx=%s)', async (isHx) => {
@@ -652,7 +810,7 @@ describe('Credential expiry and sign-out', () => {
     expect(res.text).not.toContain('Case approved.');
     expect(res.text).not.toContain('Priya Holloway');
     expect(res.text).not.toContain(managerToken);
-    expect(res.get('Set-Cookie')).toContainEqual(expect.stringContaining('kyc_access_token=;'));
+    expect(res.get('Set-Cookie')).toContainEqual(expect.stringContaining('kyc_session_3000=;'));
     if (isHx) {
       expect(res.headers['hx-redirect']).toBe('/sign-in');
       expect(res.headers['hx-retarget']).toBeUndefined();
@@ -669,12 +827,16 @@ describe('Credential expiry and sign-out', () => {
     expect(res.text).toBe('');
   });
 
-  it.each([false, true])('signs out without requiring or revoking an active token (htmx=%s)', async (isHx) => {
+  it.each([false, true])('revokes even an expired session before clearing the browser cookie (htmx=%s)', async (isHx) => {
     const { app, calls } = buildApp({ rejectedTokens: [managerToken] });
     const res = await authenticated(app).post('/sign-out').set('HX-Request', String(isHx)).expect(isHx ? 204 : 303);
-    expect(calls).toHaveLength(0);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.url).toBe('http://api.test/api/auth/sign-out');
+    expect(calls[0]?.init?.method).toBe('POST');
+    expect(new Headers(calls[0]?.init?.headers).get('authorization')).toBe(`Bearer ${managerToken}`);
+    expect(calls[0]?.init?.body).toBeUndefined();
     const cookies: string[] = res.get('Set-Cookie') ?? [];
-    for (const name of ['kyc_access_token', 'analyst_id']) {
+    for (const name of ['kyc_session_3000', 'analyst_id']) {
       const cookie = cookies.find((value) => value.startsWith(`${name}=`));
       expect(cookie).toContain(`${name}=;`);
       expect(cookie).toContain('Expires=Thu, 01 Jan 1970');
@@ -696,15 +858,15 @@ describe('Credential expiry and sign-out', () => {
     function post(path: string) {
       return browser.post(path).set('Host', '127.0.0.1').set('Origin', 'http://127.0.0.1').type('form');
     }
-    await post('/sign-in').send({ accessToken: managerToken }).expect(303);
+    await post('/sign-in').send(credentials()).expect(303);
     expect((await browser.get('/').expect(200)).text).toContain('Signed in as Sofia Chen');
     await post('/sign-out').expect(303);
     const signedOut = await browser.get('/').expect(401);
     expect(signedOut.text).not.toContain('Sofia Chen');
     expect(signedOut.text).not.toContain('Priya Holloway');
-    await post('/sign-in').send({ analystId: 'ana-003' }).expect(401);
+    await post('/sign-in').send({ analystId: 'ana-003' }).expect(400);
     await browser.get('/').expect(401);
-    await post('/sign-in').send({ accessToken: tokens['ana-003'] }).expect(303);
+    await post('/sign-in').send(credentials('ana-003')).expect(303);
     const signedIn = await browser.get('/').expect(200);
     expect(signedIn.text).toContain('Signed in as Grete Lindholm');
     expect(signedIn.text).not.toContain('Signed in as Sofia Chen');
@@ -723,14 +885,161 @@ describe('Credential expiry and sign-out', () => {
     expect(calls.every((call) => !call.url.includes(managerToken))).toBe(true);
     expect(calls.every((call) => !String(call.init?.body ?? '').includes(managerToken))).toBe(true);
   });
+
+  it('revokes only the current session and leaves another user signed in', async () => {
+    const { app, calls } = buildApp();
+    await authenticated(app).post('/sign-out').type('form').send({ expectedAnalystId: 'ana-006' }).expect(303);
+    await authenticated(app).get('/').expect(401);
+    const other = await authenticated(app).get('/').set('Cookie', authCookie(tokens['ana-003']!)).expect(200);
+    expect(other.text).toContain('Signed in as Grete Lindholm');
+    const revocations = calls.filter((call) => call.url.endsWith('/api/auth/sign-out'));
+    expect(revocations).toHaveLength(1);
+    expect(new Headers(revocations[0]?.init?.headers).get('authorization')).toBe(`Bearer ${managerToken}`);
+    expect(revocations[0]?.init?.body).toBeUndefined();
+  });
+
+  it.each(['', 'malformed', unknownToken])('allows sign-out without a usable active session (%s)', async (token) => {
+    const { app, calls } = buildApp();
+    const res = await authenticated(app).post('/sign-out').set('Cookie', authCookie(token)).expect(303);
+    expect(calls).toHaveLength(token === unknownToken ? 1 : 0);
+    expect(res.headers.location).toBe('/sign-in');
+    expect(res.get('Set-Cookie')).toContainEqual(expect.stringContaining('kyc_session_3000=;'));
+  });
+
+  it.each([false, true])('visibly reports failed revocation and clears the cookie (htmx=%s)', async (isHx) => {
+    const { app } = buildApp({ response: () => new Response(`failed ${managerToken}`, { status: 500 }) });
+    const res = await authenticated(app).post('/sign-out').set('HX-Request', String(isHx)).expect(502);
+    expect(res.get('Set-Cookie')).toContainEqual(expect.stringContaining('kyc_session_3000=;'));
+    expect(res.get('Set-Cookie')?.join(';')).not.toContain(managerToken);
+    const page = isHx ? await request(app).get('/sign-in?notice=logout-failed').expect(200) : res;
+    expect(page.text).toContain('could not confirm session revocation');
+    expect(page.text).toContain('may remain active until it expires');
+    expect(page.text).not.toContain(managerToken);
+    if (isHx) expect(res.headers['hx-redirect']).toBe('/sign-in?notice=logout-failed');
+  });
+
+  it('clears cookies and shows a warning when revocation cannot reach the API', async () => {
+    const { app } = buildApp({ unreachable: true });
+    const res = await authenticated(app).post('/sign-out').expect(502);
+    expect(res.text).toContain('could not confirm session revocation');
+    expect(res.get('Set-Cookie')).toContainEqual(expect.stringContaining('kyc_session_3000=;'));
+  });
+
+  it.each([200, 401])('does not claim successful revocation for unexpected HTTP %s', async (status) => {
+    const { app } = buildApp({ response: () => json({}, status) });
+    const res = await authenticated(app).post('/sign-out').expect(502);
+    expect(res.text).toContain('could not confirm session revocation');
+    expect(res.headers.location).toBeUndefined();
+  });
+
+  it.each(['/sign-out', '/cases/case-006/actions/approve'])('rejects a stale identity at %s before mutation', async (path) => {
+    const { app, calls } = buildApp();
+    const res = await authenticated(app).post(path).type('form')
+      .send({ expectedAnalystId: 'ana-003', note: 'Reviewed the evidence.' }).expect(409);
+    expect(res.text).toContain('Your signed-in user changed');
+    expect(res.get('Set-Cookie')).toBeUndefined();
+    expect(calls.some((call) => call.init?.method === 'POST')).toBe(false);
+    await authenticated(app).get('/').expect(200);
+  });
+
+  it('renders identity guards from the current actor and forwards only that verified actor on mutation', async () => {
+    const { app, calls } = buildApp();
+    const res = await authenticated(app).get('/cases/case-006/actions/approve').expect(200);
+    expect(res.text.match(/name="expectedAnalystId" value="ana-006"/g)).toHaveLength(2);
+    await authenticated(app).post('/cases/case-006/actions/approve').set('x-analyst-id', 'ana-003')
+      .type('form').send({ expectedAnalystId: 'ana-006', analystId: 'ana-003', note: 'Reviewed the evidence.' }).expect(303);
+    const action = calls.find((call) => call.init?.method === 'POST');
+    expect(new Headers(action?.init?.headers).get('x-analyst-id')).toBe('ana-006');
+    expect(JSON.parse(String(action?.init?.body))).toEqual({ action: 'approve', note: 'Reviewed the evidence.' });
+  });
 });
 
 describe('Cookie transport and form origins', () => {
+  it('isolates both sessions when a browser sends cookies for two configured ports together', async () => {
+    vi.stubEnv('ALLOW_INSECURE_LOCAL_AUTH', 'true');
+    const first = buildApp();
+    vi.stubEnv('PORT', '3001');
+    const second = buildApp();
+    const signIn = (app: ReturnType<typeof createApp>, port: number, analystId: string) =>
+      request(app).post('/sign-in').set('Host', `localhost:${port}`).set('Origin', `http://localhost:${port}`)
+        .type('form').send(credentials(analystId)).expect(303);
+    const [firstLogin, secondLogin] = await Promise.all([
+      signIn(first.app, 3000, 'ana-003'), signIn(second.app, 3001, 'ana-006'),
+    ]);
+    const firstCookie = firstLogin.get('Set-Cookie')!.find((cookie) => cookie.startsWith(authCookie(tokens['ana-003']!)))!;
+    const secondCookie = secondLogin.get('Set-Cookie')!.find((cookie) => cookie.startsWith(authCookie(managerToken, 3001)))!;
+    const sharedCookies = [firstCookie.split(';')[0], secondCookie.split(';')[0]].join('; ');
+    const one = await request(first.app).get('/').set('Cookie', sharedCookies).expect(200);
+    const two = await request(second.app).get('/').set('Cookie', sharedCookies).expect(200);
+    expect(one.text).toContain('Signed in as Grete Lindholm');
+    expect(two.text).toContain('Signed in as Sofia Chen');
+    const logout = await request(first.app).post('/sign-out').set('Cookie', sharedCookies)
+      .set('Host', 'localhost:3000').set('Origin', 'http://localhost:3000')
+      .type('form').send({ expectedAnalystId: 'ana-003' }).expect(303);
+    expect(logout.get('Set-Cookie')?.join(';')).not.toContain('kyc_session_3001');
+    await request(first.app).get('/').set('Cookie', sharedCookies).expect(401);
+    expect((await request(second.app).get('/').set('Cookie', sharedCookies).expect(200)).text)
+      .toContain('Signed in as Sofia Chen');
+    expect(second.calls.some((call) => call.url.endsWith('/api/auth/sign-out'))).toBe(false);
+  });
+
+  it('does not select the cookie namespace from the untrusted request Host', async () => {
+    const { app, calls } = buildApp();
+    const res = await request(app).post('/sign-in').set('Host', 'other.test:9999').set('Origin', 'https://other.test:9999')
+      .type('form').send(credentials()).expect(303);
+    expect(res.get('Set-Cookie')?.find((cookie) => cookie.startsWith(authCookie()))).toBeDefined();
+    expect(res.get('Set-Cookie')?.join(';')).not.toContain('kyc_session_9999');
+    calls.length = 0;
+    await request(app).get('/').set('Host', 'other.test:9999').set('Cookie', authCookie(managerToken, 9999)).expect(401);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('supports an explicit cookie namespace without reading or clearing another instance', async () => {
+    vi.stubEnv('SESSION_COOKIE_NAME', 'console_c_custom');
+    const { app, calls } = buildApp();
+    const login = await authenticated(app).post('/sign-in').type('form').send(credentials()).expect(303);
+    expect(login.get('Set-Cookie')?.join(';')).toContain(`console_c_custom=${managerToken}`);
+    const res = await authenticated(app).post('/sign-out').expect(303);
+    expect(res.get('Set-Cookie')?.join(';')).not.toContain('kyc_session_3000');
+    expect(calls.filter((call) => call.url.endsWith('/api/auth/sign-out'))).toHaveLength(0);
+    await request(app).get('/').set('Cookie', `console_c_custom=${managerToken}`).expect(200);
+  });
+
+  it.each(['', 'bad;name', 'bad name', 'analyst_id', 'kyc_access_token'])('rejects unsafe cookie names (%s)', (name) => {
+    vi.stubEnv('SESSION_COOKIE_NAME', name);
+    expect(() => buildApp()).toThrow('SESSION_COOKIE_NAME');
+  });
+
+  it.each(['', '0', '-1', '3000.5', '65536', 'not-a-port'])('rejects invalid configured ports (%s)', (port) => {
+    vi.stubEnv('PORT', port);
+    expect(() => buildApp()).toThrow('PORT must be an integer');
+  });
+
+  it('ignores and clears legacy token cookies without using them to authenticate', async () => {
+    const { app, calls } = buildApp();
+    const res = await request(app).get('/').set('Cookie', `kyc_access_token=${managerToken}`).expect(401);
+    expect(calls).toHaveLength(0);
+    expect(res.get('Set-Cookie')).toContainEqual(expect.stringContaining('kyc_access_token=;'));
+  });
+
+  it.each(['', 'ana-006', 'a'.repeat(42), 'a'.repeat(44), '!'.repeat(43)])(
+    'rejects malformed session cookies without contacting the API (%s)', async (token) => {
+      const { app, calls } = buildApp();
+      for (const path of ['/', '/cases/case-006', '/cases/case-006/actions/approve']) {
+        const res = await request(app).get(path).set('Cookie', authCookie(token)).expect(401);
+        expect(res.text).toContain('Your session has ended.');
+        expect(res.text).not.toContain('Priya Holloway');
+        expect(res.get('Set-Cookie')).toContainEqual(expect.stringContaining('kyc_session_3000=;'));
+      }
+      expect(calls).toHaveLength(0);
+    },
+  );
+
   it('requires HTTPS origin by default and does not enable trust proxy', async () => {
     const { app, calls } = buildApp();
     expect(app.get('trust proxy')).toBe(false);
     const res = await request(app).post('/sign-in').set('Host', 'web.test').set('Origin', 'http://web.test')
-      .type('form').send({ accessToken: managerToken }).expect(403);
+      .type('form').send(credentials()).expect(403);
     expect(calls).toHaveLength(0);
     expect(res.get('Set-Cookie')).toBeUndefined();
   });
@@ -738,7 +1047,7 @@ describe('Cookie transport and form origins', () => {
   it.each(['', 'false', 'TRUE', '1'])('keeps Secure unless the HTTP opt-in is exactly true (%s)', async (value) => {
     vi.stubEnv('ALLOW_INSECURE_LOCAL_AUTH', value);
     const { app } = buildApp();
-    const res = await authenticated(app).post('/sign-in').type('form').send({ accessToken: managerToken }).expect(303);
+    const res = await authenticated(app).post('/sign-in').type('form').send(credentials()).expect(303);
     const cookies = res.get('Set-Cookie') ?? [];
     expect(cookies.find((cookie) => cookie.startsWith(authCookie()))).toContain('Secure');
   });
@@ -748,14 +1057,14 @@ describe('Cookie transport and form origins', () => {
     vi.stubEnv('NODE_ENV', 'development');
     const { app } = buildApp();
     const res = await request(app).post('/sign-in').set('Host', 'localhost:3000').set('Origin', 'http://localhost:3000')
-      .type('form').send({ accessToken: managerToken }).expect(303);
+      .type('form').send(credentials()).expect(303);
     const cookies = res.get('Set-Cookie') ?? [];
     const cookie = cookies.find((value) => value.startsWith(authCookie()));
     expect(cookie).not.toContain('Secure');
     expect(cookie).toContain('HttpOnly');
     expect(cookie).toContain('SameSite=Strict');
     expect(cookie).toContain('Path=/');
-    expect(cookie).toContain('Max-Age=28800');
+    expect(cookie).toContain('Max-Age=43200');
     const cleared = await request(app).post('/sign-out').set('Host', 'localhost:3000').set('Origin', 'http://localhost:3000').expect(303);
     expect(cleared.get('Set-Cookie')?.join(';')).not.toContain('Secure');
   });
@@ -769,7 +1078,7 @@ describe('Cookie transport and form origins', () => {
   it('keeps secure cookies in production', async () => {
     vi.stubEnv('NODE_ENV', 'production');
     const { app } = buildApp();
-    const res = await authenticated(app).post('/sign-in').type('form').send({ accessToken: managerToken }).expect(303);
+    const res = await authenticated(app).post('/sign-in').type('form').send(credentials()).expect(303);
     const cookies = res.get('Set-Cookie') ?? [];
     expect(cookies.find((cookie) => cookie.startsWith(authCookie()))).toContain('Secure');
   });
@@ -781,13 +1090,13 @@ describe('Cookie transport and form origins', () => {
         .set('X-Forwarded-Host', 'evil.test').set('X-Forwarded-Proto', 'http');
       if (origin === undefined) submission.unset('Origin');
       else submission.set('Origin', origin);
-      const res = await submission.type('form').send({ accessToken: managerToken, note: 'Reviewed the evidence.' }).expect(403);
+      const res = await submission.type('form').send({ ...credentials(), note: 'Reviewed the evidence.' }).expect(403);
       expect(res.get('Set-Cookie')).toBeUndefined();
       expect(res.text).not.toContain(managerToken);
       expect(res.headers['cache-control']).toBe('no-store');
     }
     await authenticated(app).post(path).set('Sec-Fetch-Site', 'cross-site')
-      .type('form').send({ accessToken: managerToken, note: 'Reviewed the evidence.' }).expect(403);
+      .type('form').send({ ...credentials(), note: 'Reviewed the evidence.' }).expect(403);
     expect(calls).toHaveLength(0);
   });
 });

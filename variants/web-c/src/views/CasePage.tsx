@@ -306,9 +306,10 @@ export interface ActionDialogProps {
   action: CaseAction;
   note: string;
   error: string | null;
+  expectedAnalystId: string;
 }
 
-export function ActionDialog({ kase, action, note, error }: ActionDialogProps) {
+export function ActionDialog({ kase, action, note, error, expectedAnalystId }: ActionDialogProps) {
   const rule = noteRule(action, kase.riskLevel, kase.approvalNoteRequired);
   const titleId = 'action-dialog-title';
   return (
@@ -320,6 +321,7 @@ export function ActionDialog({ kase, action, note, error }: ActionDialogProps) {
         hx-target="#case-main"
         hx-swap="outerHTML"
       >
+        <input type="hidden" name="expectedAnalystId" value={expectedAnalystId} />
         <h2 id={titleId}>
           {ACTION_LABELS[action]} {kase.reference}
         </h2>
