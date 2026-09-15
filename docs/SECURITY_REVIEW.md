@@ -29,7 +29,12 @@ Every sensitive API route requires an authenticated credential. Case and policy 
 
 ### Authenticated access
 
-The local development adapter replaces browser token entry with email/password sign-in.
+The local development adapter replaces browser token entry with email/password sign-in. The
+selected SPA hides those fictional credentials behind an Analyst / Reviewer / Admin picker.
+The client maps the label to a seeded account, then verifies the issued session through `/api/me`
+before installing it. A failed verification requests revocation of the new session. The API never
+accepts the selected label, role or analyst ID as authentication; current database identity and
+permissions remain authoritative.
 `LOCAL_DEMO_AUTH=true` is explicit in the API dev script; ordinary startup disables it.
 Production rejects enabling it and rejects demo seeding. Disabled adapters do not accept
 previously issued demo sessions. The shared seeded password is intentionally public, for

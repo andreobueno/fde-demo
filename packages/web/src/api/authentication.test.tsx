@@ -21,14 +21,16 @@ beforeEach(() => {
 afterEach(() => { clearIdentity(); vi.unstubAllGlobals(); });
 
 describe('credential-based sign-in', () => {
-  it('requires a masked credential without exposing selectable roles', () => {
+  it('offers local mock users without exposing credentials in the form', () => {
     const html = renderToStaticMarkup(<ManualIdentityForm />);
-    expect(html).toContain('<label for="sign-in-email">Email</label>');
-    expect(html).toContain('<label for="sign-in-password">Password</label>');
+    expect(html).toContain('<label for="demo-user">Mock user</label>');
+    expect(html).toContain('Analyst — Grete Lindholm');
+    expect(html).toContain('Reviewer — Marta Ellison');
+    expect(html).toContain('Admin — Sofia Chen');
     expect(html).not.toContain('Access token');
-    expect(html).toContain('type="password"');
-    expect(html).toContain('Sign in</button>');
-    expect(html).not.toContain('Demo identity');
+    expect(html).not.toContain('type="password"');
+    expect(html).not.toContain('demo-password-2026');
+    expect(html).toContain('Log in</button>');
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
