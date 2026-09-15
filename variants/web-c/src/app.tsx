@@ -5,10 +5,10 @@ import type { NextFunction, Request, Response } from 'express';
 import { Fragment, createElement } from 'react';
 import type { ReactElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { ApiError, ApiUnreachableError } from './api/client.js';
+import { ApiError, ApiUnreachableError, SESSION_TOKEN_PATTERN } from './api/client.js';
 import type { ApiClient } from './api/client.js';
 import { CASE_ACTIONS } from './api/types.js';
-import type { Analyst, CaseAction, CaseDetail } from './api/types.js';
+import type { Analyst, AuthenticatedAnalyst, CaseAction, CaseDetail } from './api/types.js';
 import { verifyChain } from './lib/audit.js';
 import { parseFilters, queueUrl } from './lib/filters.js';
 import { ACTION_LABELS, normaliseNote, validateNote } from './lib/validation.js';
@@ -16,8 +16,14 @@ import { ActionDialog, CaseMain, NotFoundCase } from './views/CasePage.js';
 import { ErrorPanel, Layout, SignIn } from './views/Layout.js';
 import { QueuePage, QueueResults } from './views/QueuePage.js';
 
-const AUTH_COOKIE = 'kyc_access_token';
-const TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+const AUTH_NOTICES = {
+  validation: 'Enter a valid email address and password.',
+  'invalid-credentials': 'Incorrect email or password.',
+  throttled: 'Too many sign-in attempts. Try again later.',
+  unavailable: 'Sign-in is unavailable right now. Please try again.',
+  'logout-failed': 'This browser is signed out, but the API could not confirm session revocation. The server session may remain active until it expires. Contact an administrator.',
+};
+type AuthNotice = keyof typeof AUTH_NOTICES;
 
 const CSP = [
   "default-src 'self'",
@@ -43,7 +49,7 @@ export interface AppOptions {
 
 interface RequestContext {
   analysts: Analyst[];
-  analyst: Analyst;
+  analyst: AuthenticatedAnalyst;
   accessToken: string;
   isHx: boolean;
 }
@@ -84,6 +90,18 @@ export function createApp({ api, publicDir }: AppOptions) {
   if (insecureLocalAuth && process.env.NODE_ENV === 'production') {
     throw new Error('ALLOW_INSECURE_LOCAL_AUTH is not permitted in production.');
   }
+  const localDemo = process.env.LOCAL_DEMO_AUTH === 'true';
+  if (localDemo && process.env.NODE_ENV === 'production') {
+    throw new Error('LOCAL_DEMO_AUTH is not permitted in production.');
+  }
+  const port = Number(process.env.PORT ?? 3000);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error('PORT must be an integer between 1 and 65535.');
+  }
+  const authCookie = process.env.SESSION_COOKIE_NAME ?? `kyc_session_${port}`;
+  if (!/^[A-Za-z0-9_-]+$/.test(authCookie) || ['analyst_id', 'kyc_access_token'].includes(authCookie)) {
+    throw new Error('SESSION_COOKIE_NAME must be a unique cookie name using letters, digits, underscores or hyphens.');
+  }
   const cookieOptions = {
     httpOnly: true,
     sameSite: 'strict' as const,
@@ -95,20 +113,24 @@ export function createApp({ api, publicDir }: AppOptions) {
   app.set('etag', false);
 
   function clearCredential(res: Response) {
-    res.clearCookie(AUTH_COOKIE, cookieOptions);
+    res.clearCookie(authCookie, cookieOptions);
+    res.clearCookie('kyc_access_token', cookieOptions);
     res.clearCookie('analyst_id', cookieOptions);
   }
 
-  function signInPage(req: Request, res: Response, status: number) {
+  function signInPage(req: Request, res: Response, status: number, notice?: AuthNotice) {
     if (req.get('HX-Request') === 'true') {
-      res.setHeader('HX-Redirect', '/sign-in');
+      res.setHeader('HX-Redirect', notice ? `/sign-in?notice=${notice}` : '/sign-in');
       res.status(status).end();
       return;
     }
     res.status(status).type('html').send(html(Layout({
       title: 'Sign in',
       currentAnalyst: null,
-      children: SignIn({ error: status === 401 ? 'Sign in with a valid access token.' : null }),
+      children: SignIn({
+        error: notice ? AUTH_NOTICES[notice] : status === 401 ? 'Your session has ended. Please sign in again.' : null,
+        localDemo,
+      }),
     })));
   }
 
@@ -122,13 +144,30 @@ export function createApp({ api, publicDir }: AppOptions) {
   }
 
   async function context(req: Request): Promise<RequestContext> {
-    const accessToken = parseCookies(req.headers.cookie)[AUTH_COOKIE] ?? '';
-    if (!TOKEN_PATTERN.test(accessToken)) {
-      throw new ApiError(401, 'UNAUTHORIZED', 'Sign in with a valid access token.');
+    const accessToken = parseCookies(req.headers.cookie)[authCookie] ?? '';
+    if (!SESSION_TOKEN_PATTERN.test(accessToken)) {
+      throw new ApiError(401, 'UNAUTHORIZED', 'Your session has ended. Please sign in again.');
     }
     const analyst = await api.me(accessToken);
     const analysts = await api.analysts(accessToken);
     return { analysts, analyst, accessToken, isHx: req.get('HX-Request') === 'true' };
+  }
+
+  function matchesExpectedIdentity(req: Request, res: Response, analyst: AuthenticatedAnalyst): boolean {
+    const body = req.body as Record<string, unknown>;
+    if (body.expectedAnalystId === undefined || body.expectedAnalystId === analyst.id) return true;
+    if (req.get('HX-Request') === 'true') {
+      res.setHeader('HX-Redirect', '/');
+    }
+    res.status(409).type('html').send(html(Layout({
+      title: 'Session changed',
+      currentAnalyst: analyst,
+      children: ErrorPanel({
+        heading: 'Your signed-in user changed',
+        message: 'Reload the page and review it as the current user before submitting again.',
+      }),
+    })));
+    return false;
   }
 
   function page(
@@ -167,6 +206,9 @@ export function createApp({ api, publicDir }: AppOptions) {
     if (parseCookies(req.headers.cookie).analyst_id !== undefined) {
       res.clearCookie('analyst_id', cookieOptions);
     }
+    if (parseCookies(req.headers.cookie).kyc_access_token !== undefined) {
+      res.clearCookie('kyc_access_token', cookieOptions);
+    }
     if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
     try {
       const protocol = cookieOptions.secure ? 'https' : req.protocol;
@@ -184,29 +226,58 @@ export function createApp({ api, publicDir }: AppOptions) {
   });
 
   app.get('/sign-in', (req, res) => {
-    signInPage(req, res, 200);
+    const notice = req.query.notice;
+    signInPage(req, res, 200,
+      typeof notice === 'string' && Object.hasOwn(AUTH_NOTICES, notice) ? notice as AuthNotice : undefined);
   });
 
-  app.post('/sign-in', async (req, res, next) => {
+  app.post('/sign-in', async (req, res) => {
     clearCredential(res);
     try {
       const body = req.body as Record<string, unknown>;
-      const accessToken = typeof body.accessToken === 'string' ? body.accessToken : '';
-      if (!TOKEN_PATTERN.test(accessToken)) {
-        signInPage(req, res, 401);
+      const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
+      const password = typeof body.password === 'string' ? body.password : '';
+      if (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ||
+          password.length === 0 || password.length > 256) {
+        signInPage(req, res, 400, 'validation');
         return;
       }
-      await api.me(accessToken);
-      res.cookie(AUTH_COOKIE, accessToken, { ...cookieOptions, maxAge: 8 * 60 * 60 * 1000 });
+      const { session } = await api.signIn(email, password);
+      res.cookie(authCookie, session.token, {
+        ...cookieOptions,
+        maxAge: Date.parse(session.expiresAt) - Date.now(),
+      });
       redirectPage(req, res, '/');
     } catch (err) {
-      next(err);
+      if (err instanceof ApiError && [400, 401, 429].includes(err.status)) {
+        const notice = err.status === 400 ? 'validation' : err.status === 401 ? 'invalid-credentials' : 'throttled';
+        signInPage(req, res, err.status, notice);
+        return;
+      }
+      signInPage(req, res, 502, 'unavailable');
     }
   });
 
-  app.post('/sign-out', (req, res) => {
-    clearCredential(res);
-    redirectPage(req, res, '/sign-in');
+  app.post('/sign-out', async (req, res) => {
+    const accessToken = parseCookies(req.headers.cookie)[authCookie] ?? '';
+    try {
+      const body = req.body as Record<string, unknown>;
+      if (SESSION_TOKEN_PATTERN.test(accessToken) && body.expectedAnalystId !== undefined) {
+        const analyst = await api.me(accessToken).catch((err: unknown) => {
+          if (err instanceof ApiError && err.status === 401) return null;
+          throw err;
+        });
+        if (analyst && !matchesExpectedIdentity(req, res, analyst)) return;
+      }
+      clearCredential(res);
+      if (SESSION_TOKEN_PATTERN.test(accessToken)) {
+        await api.signOut(accessToken);
+      }
+      redirectPage(req, res, '/sign-in');
+    } catch {
+      clearCredential(res);
+      signInPage(req, res, 502, 'logout-failed');
+    }
   });
 
   app.get('/', async (req, res, next) => {
@@ -277,13 +348,13 @@ export function createApp({ api, publicDir }: AppOptions) {
       }
       if (ctx.isHx) {
         const kase = await api.getCase(id, ctx.accessToken);
-        res.type('html').send(fragment(ActionDialog({ kase, action, note: '', error: null })));
+        res.type('html').send(fragment(ActionDialog({ kase, action, note: '', error: null, expectedAnalystId: ctx.analyst.id })));
         return;
       }
       const view = await loadCaseView(id, ctx.accessToken);
       const body = [
         CaseMain({ ...view, analysts: ctx.analysts }),
-        ActionDialog({ kase: view.kase, action, note: '', error: null }),
+        ActionDialog({ kase: view.kase, action, note: '', error: null, expectedAnalystId: ctx.analyst.id }),
       ];
       page(res, ctx, `${ACTION_LABELS[action]} ${view.kase.reference}`, createFragmentList(body));
     } catch (err) {
@@ -295,6 +366,7 @@ export function createApp({ api, publicDir }: AppOptions) {
     const { id, action } = req.params;
     try {
       const ctx = await context(req);
+      if (!matchesExpectedIdentity(req, res, ctx.analyst)) return;
       if (!isCaseAction(action)) {
         res.status(404).type('text').send('Unknown action');
         return;
@@ -304,7 +376,7 @@ export function createApp({ api, publicDir }: AppOptions) {
       const kase = await api.getCase(id, ctx.accessToken);
 
       const respondError = (message: string, status: number) => {
-        const dialog = ActionDialog({ kase, action, note: rawNote, error: message });
+        const dialog = ActionDialog({ kase, action, note: rawNote, error: message, expectedAnalystId: ctx.analyst.id });
         if (ctx.isHx) {
           res.setHeader('HX-Retarget', '#dialog-slot');
           res.setHeader('HX-Reswap', 'innerHTML');
@@ -331,7 +403,7 @@ export function createApp({ api, publicDir }: AppOptions) {
       }
 
       try {
-        await api.performAction(id, ctx.accessToken, action, normaliseNote(rawNote));
+        await api.performAction(id, ctx.accessToken, action, normaliseNote(rawNote), ctx.analyst.id);
       } catch (err) {
         if (err instanceof ApiError && [400, 403, 409].includes(err.status)) {
           respondError(err.message, err.status);

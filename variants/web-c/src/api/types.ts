@@ -26,6 +26,15 @@ export interface AuthenticatedAnalyst extends Analyst {
   permissions: string[];
 }
 
+export interface SignInResponse {
+  analyst: AuthenticatedAnalyst;
+  session: {
+    token: string;
+    expiresAt: string;
+    idleTimeoutMs: number;
+  };
+}
+
 export interface Customer {
   id: string;
   fullName: string;
