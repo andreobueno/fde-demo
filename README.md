@@ -14,7 +14,7 @@ npm workspaces monorepo:
 | Package | Role |
 | --- | --- |
 | `packages/server` | Express + better-sqlite3 API (TypeScript, ESM). Implements [`docs/API_CONTRACT.md`](docs/API_CONTRACT.md). Layered `http → services → domain (pure) → repo → SQLite`; see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). |
-| `packages/web` | Default UI: Vite + React 18 + react-router-dom SPA. Talks to the API over HTTP on `http://localhost:4000` (Vite proxies `/api/*`). |
+| `packages/web` | Default UI: Vite + React 18 + react-router-dom SPA. Talks to the API over HTTP on `http://127.0.0.1:4000` (Vite proxies `/api/*`). |
 | `variants/web-b`, `variants/web-c` | Alternative UI implementations evaluated during selection — see [`variants/README.md`](variants/README.md). |
 
 ### UI (`packages/web`)
@@ -134,11 +134,11 @@ Environment variables (server): `PORT` (default `4000`), `KYC_DB_PATH` (default 
 Quick smoke test after `npm run dev:server`:
 
 ```bash
-curl -s http://localhost:4000/api/health
+curl -s http://127.0.0.1:4000/api/health
 { printf 'Authorization: Bearer '; cat .auth/analyst.token; } |
-  curl -s --header @- 'http://localhost:4000/api/cases?riskLevel=high&pageSize=3'
+  curl -s --header @- 'http://127.0.0.1:4000/api/cases?riskLevel=high&pageSize=3'
 { printf 'Authorization: Bearer '; cat .auth/analyst.token; } |
-  curl -s --header @- -X POST 'http://localhost:4000/api/cases/<id>/actions' \
+  curl -s --header @- -X POST 'http://127.0.0.1:4000/api/cases/<id>/actions' \
   -H 'content-type: application/json' \
   -d '{"action":"start_review"}'
 ```

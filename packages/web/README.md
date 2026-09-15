@@ -11,11 +11,11 @@ npm install
 npm run seed          # destructive reset of the fictional database
 mkdir -p -m 700 .auth
 npm run auth:issue -w packages/server -- ana-003 "$PWD/.auth/analyst.token"
-npm run dev:server    # API on http://localhost:4000
+npm run dev:server    # API on http://127.0.0.1:4000
 npm run dev:web     # this app on http://localhost:5173
 ```
 
-Vite proxies `/api/*` to `http://localhost:4000` (see `vite.config.ts`), so the SPA
+Vite proxies `/api/*` to `http://127.0.0.1:4000` (see `vite.config.ts`), so the SPA
 makes same-origin requests and no CORS setup is needed. Enter the issued credential in the
 sign-in form. `/api/me` verifies it before sensitive routes load; all API requests send a bearer
 credential and an expected-identity guard. The token stays in memory only. Sign-out/switching users

@@ -1,6 +1,6 @@
 # KYC Review Console — API contract (v1)
 
-Backend: Express + better-sqlite3, TypeScript. Base URL `http://localhost:4000`.
+Backend: Express + better-sqlite3, TypeScript. Base URL `http://127.0.0.1:4000`.
 All responses JSON except `204` sign-out. Errors: `{ "error": { "code": string, "message": string, "details"?: unknown } }` with 400/401/403/404/409/429/500. Responses use `Cache-Control: no-store`.
 
 ## Authentication and identity
