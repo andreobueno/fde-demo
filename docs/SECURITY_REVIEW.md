@@ -68,6 +68,10 @@ Missing, malformed, unknown, expired or revoked tokens receive a generic `401`. 
 also requires authentication; directory entries cannot grant a caller access to those identities.
 Current roles are loaded from SQLite, so a role change takes effect without reissuing a token.
 
+The selected SPA preserves same-origin cookies for authenticated preview/reverse-proxy access.
+The API ignores cookies when resolving application identity and still requires its bearer token.
+Fetch redirects remain disabled.
+
 The selected SPA and reference SPA require verified sign-in before loading sensitive pages and
 keep session tokens in `sessionStorage`. It isolates browser tabs and origins (including ports)
 and supports refresh by rechecking `/api/me`. Neither password nor actor/role is stored there.

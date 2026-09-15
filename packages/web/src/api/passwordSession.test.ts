@@ -51,7 +51,9 @@ describe('local password sessions', () => {
       .mockResolvedValueOnce(login(analyst))
       .mockResolvedValueOnce(Response.json(manager));
     await signInDemoUser('admin');
-    expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/auth/demo-users', expect.anything());
+    expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/auth/demo-users', expect.objectContaining({
+      credentials: 'same-origin',
+    }));
     expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/auth/sign-in', expect.objectContaining({
       method: 'POST',
       body: JSON.stringify({
@@ -59,12 +61,14 @@ describe('local password sessions', () => {
         password: 'demo-password-2026',
       }),
       headers: { 'content-type': 'application/json' },
+      credentials: 'same-origin',
     }));
     expect(fetchMock).toHaveBeenNthCalledWith(3, '/api/me', expect.objectContaining({
       headers: {
         'content-type': 'application/json',
         Authorization: `Bearer ${token}`,
       },
+      credentials: 'same-origin',
     }));
     expect(getIdentity()?.analyst).toEqual(manager);
     expect(storedSession()).toBe(token);
@@ -116,7 +120,7 @@ describe('local password sessions', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/auth/sign-in', expect.objectContaining({
       method: 'POST', body: JSON.stringify({ email: 'analyst@example.test', password }),
       headers: { 'content-type': 'application/json' },
-      credentials: 'omit', redirect: 'error',
+      credentials: 'same-origin', redirect: 'error',
     }));
     expect([...storage.values()]).toEqual([token]);
     expect(getIdentity()?.analyst).toEqual(analyst);

@@ -43,7 +43,7 @@ describe('credential-based sign-in', () => {
     expect(getIdentity()).toBeNull();
     expect(fetchMock).toHaveBeenCalledWith('/api/me', expect.objectContaining({
       headers: { 'content-type': 'application/json', Authorization: `Bearer ${token}` },
-      credentials: 'omit', redirect: 'error',
+      credentials: 'same-origin', redirect: 'error',
     }));
     respond(Response.json(analyst));
     await expect(pending).resolves.toEqual(analyst);

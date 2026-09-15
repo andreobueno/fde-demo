@@ -221,6 +221,21 @@ describe('sessions', () => {
     expect(me.body.permissions).toEqual(permissionsFor('compliance_manager'));
   });
 
+  it('ignores cookies as identity even when they contain another valid session', async () => {
+    const managerToken = await tokenFor(manager.id);
+    const analystToken = await tokenFor(analyst.id);
+    const cookie = `token=${managerToken}; analystId=${manager.id}`;
+
+    expect((await request(app).get('/api/me').set('Cookie', cookie)).status).toBe(401);
+    const response = await request(app).get('/api/me')
+      .set('Cookie', cookie)
+      .set('Authorization', `Bearer ${analystToken}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.id).toBe(analyst.id);
+    expect(response.body.role).toBe('analyst');
+  });
+
   it('enforces distinct roles and attributes mutations to the authenticated session', async () => {
     const refund = addRefund(db, { riskLevel: 'high' });
     const junior = await tokenFor(analyst.id);

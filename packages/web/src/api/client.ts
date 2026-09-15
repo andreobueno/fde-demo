@@ -186,7 +186,7 @@ async function request<T>(
       headers,
       body: options.body === undefined ? null : JSON.stringify(options.body),
       signal,
-      credentials: 'omit',
+      credentials: 'same-origin',
       redirect: 'error',
     });
   } catch (err) {
