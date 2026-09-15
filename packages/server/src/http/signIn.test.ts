@@ -2,12 +2,15 @@ import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openDb, type Db } from '../db.js';
 import { permissionsFor } from '../domain/authorization.js';
-import { REFUND_ACTORS, refundFixtureContext } from '../refundFixtures.js';
+import { addRefund, REFUND_ACTORS, refundFixtureContext } from '../refundFixtures.js';
 import { listAuthEvents } from '../repo/authEvents.js';
 import { setAnalystPassword } from '../repo/credentials.js';
+import { issueAccessToken } from '../repo/accessTokens.js';
 import { SESSION_IDLE_TIMEOUT_MS, SESSION_LIFETIME_MS } from '../repo/sessions.js';
 import { MAX_FAILED_ATTEMPTS } from '../services/authService.js';
 import { createApp } from './app.js';
+import { MAX_SOURCE_FAILURES } from './auth.js';
+import { seedDemoLogins } from '../seedLogins.js';
 
 const NOW = new Date('2026-09-11T12:00:00.000Z');
 const PASSWORD = 'demo-password-2026';
@@ -36,6 +39,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.unstubAllEnvs();
   db.close();
 });
 
@@ -66,6 +70,9 @@ describe('POST /api/auth/sign-in', () => {
     const response = await signIn(emailFor(manager.id), PASSWORD);
     expect(JSON.stringify(response.body)).not.toContain(PASSWORD);
     expect(JSON.stringify(response.body)).not.toContain('scrypt');
+    expect(JSON.stringify(db.prepare('SELECT * FROM sessions').all())).not.toContain(response.body.session.token);
+    expect(JSON.stringify(listAuthEvents(db))).not.toContain(response.body.session.token);
+    expect(response.headers['cache-control']).toBe('no-store');
   });
 
   it('accepts the email in any case and with surrounding spaces', async () => {
@@ -85,10 +92,29 @@ describe('POST /api/auth/sign-in', () => {
   });
 
   it('rejects malformed sign-in payloads', async () => {
-    for (const body of [{}, { email: 'not-an-email', password: PASSWORD }, { email: emailFor(analyst.id) }]) {
+    for (const body of [
+      {}, { email: 'not-an-email', password: PASSWORD }, { email: emailFor(analyst.id) },
+      { email: emailFor(analyst.id), password: PASSWORD, role: 'compliance_manager' },
+    ]) {
       const response = await request(app).post('/api/auth/sign-in').send(body);
       expect(response.status).toBe(400);
     }
+  });
+
+  it('limits password attempts across different accounts from the same source', async () => {
+    for (let attempt = 0; attempt < MAX_SOURCE_FAILURES; attempt++) {
+      await signIn(`unknown-${attempt}@northwind-demo.example`, WRONG_PASSWORD);
+    }
+    expect((await signIn(emailFor(manager.id), PASSWORD)).status).toBe(429);
+    expect(listAuthEvents(db).some((event) => event.reason === 'source_limit')).toBe(true);
+  });
+
+  it('rolls back session creation when its audit write fails', async () => {
+    db.exec(`CREATE TRIGGER fail_sign_in BEFORE INSERT ON auth_events
+      WHEN NEW.event = 'sign_in_succeeded'
+      BEGIN SELECT RAISE(ABORT, 'audit unavailable'); END;`);
+    expect((await signIn(emailFor(analyst.id), PASSWORD)).status).toBe(500);
+    expect(db.prepare('SELECT COUNT(*) AS n FROM sessions').get()).toEqual({ n: 0 });
   });
 
   it('throttles repeated failures for one email and keeps other identities usable', async () => {
@@ -146,6 +172,32 @@ describe('sessions', () => {
     expect(me.body.permissions).toEqual(permissionsFor('compliance_manager'));
   });
 
+  it('enforces distinct roles and attributes mutations to the authenticated session', async () => {
+    const refund = addRefund(db, { riskLevel: 'high' });
+    const junior = await tokenFor(analyst.id);
+    const elevated = await tokenFor(manager.id);
+    const decide = (token: string) => request(app)
+      .post(`/api/refunds/${refund.id}/actions`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ action: 'approve', note: 'Fictional evidence verified.' });
+    expect((await decide(junior)).status).toBe(403);
+    expect(db.prepare('SELECT COUNT(*) AS n FROM audit_events').get()).toEqual({ n: 1 });
+    expect((await request(app).get('/api/me')
+      .set('Authorization', `Bearer ${junior}`).set('x-analyst-id', manager.id)).status).toBe(403);
+    expect((await decide(elevated)).status).toBe(200);
+    expect(db.prepare('SELECT actor_id FROM audit_events ORDER BY sequence DESC LIMIT 1').get())
+      .toEqual({ actor_id: manager.id });
+  });
+
+  it('immediately applies role demotion to an existing session', async () => {
+    const refund = addRefund(db, { riskLevel: 'high' });
+    const token = await tokenFor(manager.id);
+    db.prepare('UPDATE analysts SET role = ? WHERE id = ?').run('analyst', manager.id);
+    expect((await request(app).post(`/api/refunds/${refund.id}/actions`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ action: 'approve', note: 'Fictional evidence verified.' })).status).toBe(403);
+  });
+
   it('expires idle sessions and extends active ones', async () => {
     const idle = await tokenFor(analyst.id);
     const active = await tokenFor(manager.id);
@@ -183,5 +235,36 @@ describe('sessions', () => {
       expect((await request(app).post('/api/auth/sign-out').set('Authorization', header)).status).toBe(204);
     }
     expect(listAuthEvents(db).filter((event) => event.event === 'sign_out')).toHaveLength(1);
+  });
+
+  it('rolls back logout if its audit cannot be recorded', async () => {
+    const token = await tokenFor(analyst.id);
+    db.exec(`CREATE TRIGGER fail_sign_out BEFORE INSERT ON auth_events
+      WHEN NEW.event = 'sign_out'
+      BEGIN SELECT RAISE(ABORT, 'audit unavailable'); END;`);
+    expect((await request(app).post('/api/auth/sign-out')
+      .set('Authorization', `Bearer ${token}`)).status).toBe(500);
+    expect((await request(app).get('/api/me')
+      .set('Authorization', `Bearer ${token}`)).status).toBe(200);
+  });
+});
+
+describe('local authentication boundary', () => {
+  it('disables local login and existing demo sessions by default, retaining automation tokens', async () => {
+    const session = (await signIn(emailFor(analyst.id), PASSWORD)).body.session.token;
+    const automation = issueAccessToken(db, analyst.id).token;
+    app = createApp(db, { localAuth: false });
+    const disabled = await signIn(emailFor(analyst.id), PASSWORD);
+    expect(disabled.status).toBe(404);
+    expect(disabled.body.error.code).toBe('LOCAL_AUTH_DISABLED');
+    expect((await request(app).get('/api/me').set('Authorization', `Bearer ${session}`)).status).toBe(401);
+    expect((await request(app).get('/api/me').set('Authorization', `Bearer ${automation}`)).status).toBe(200);
+  });
+
+  it('refuses local auth and demo credential seeding in production', () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    expect(() => createApp(db, { localAuth: true })).toThrow(/not permitted in production/);
+    expect(() => seedDemoLogins(db)).toThrow(/cannot be seeded in production/);
+    expect(() => createApp(db, { localAuth: false })).not.toThrow();
   });
 });

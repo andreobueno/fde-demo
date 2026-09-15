@@ -16,9 +16,9 @@ export interface SignInResult {
   session: IssuedSession;
 }
 
-/** Counts recent failures per email so guessing a seeded account is not free. */
 export class SignInThrottle {
   private failures = new Map<string, number[]>();
+  constructor(private readonly limit = MAX_FAILED_ATTEMPTS) {}
 
   private recent(key: string, now: Date): number[] {
     const attempts = (this.failures.get(key) ?? []).filter(
@@ -30,10 +30,15 @@ export class SignInThrottle {
   }
 
   isBlocked(email: string, now: Date): boolean {
-    return this.recent(normaliseEmail(email), now).length >= MAX_FAILED_ATTEMPTS;
+    return this.recent(normaliseEmail(email), now).length >= this.limit;
   }
 
   recordFailure(email: string, now: Date): void {
+    for (const key of this.failures.keys()) this.recent(key, now);
+    if (this.failures.size >= 1000 && !this.failures.has(normaliseEmail(email))) {
+      const oldest = this.failures.keys().next().value;
+      if (oldest !== undefined) this.failures.delete(oldest);
+    }
     const key = normaliseEmail(email);
     this.failures.set(key, [...this.recent(key, now), now.getTime()]);
   }
@@ -83,13 +88,18 @@ export function signIn(
     throw invalidCredentials();
   }
 
-  const session = createSession(db, analyst.id, { now });
+  const session = db.transaction(() => {
+    const session = createSession(db, analyst.id, { now });
+    recordAuthEvent(db, 'sign_in_succeeded', { email, analystId: analyst.id, now });
+    return session;
+  }).immediate();
   throttle.clear(email);
-  recordAuthEvent(db, 'sign_in_succeeded', { email, analystId: analyst.id, now });
   return { analyst: { ...analyst, permissions: permissionsFor(analyst.role) }, session };
 }
 
 export function signOut(db: Db, token: string, analystId: string | null, now = new Date()): void {
-  const revoked = revokeSession(db, token);
-  if (revoked) recordAuthEvent(db, 'sign_out', { analystId, now });
+  db.transaction(() => {
+    const revoked = revokeSession(db, token);
+    if (revoked) recordAuthEvent(db, 'sign_out', { analystId, now });
+  }).immediate();
 }

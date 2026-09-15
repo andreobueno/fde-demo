@@ -1,13 +1,16 @@
 import { createContext, useContext, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import type { ReactNode } from 'react';
-import { getAnalysts } from '../api/client';
+import { getAnalysts, restoreSession, signOut } from '../api/client';
 import type { Analyst, CurrentAnalyst } from '../api/types';
-import { clearIdentity, getIdentity, subscribeIdentity } from '../api/identity';
+import { getIdentity, subscribeIdentity } from '../api/identity';
 
 interface AnalystContextValue {
   analystId: string;
   analyst: CurrentAnalyst | null;
-  signOut: () => void;
+  signOut: () => Promise<void>;
+  restoring: boolean;
+  authError: string | null;
+  retryRestore: () => void;
   analysts: Analyst[];
   identitySignal: AbortSignal;
 }
@@ -19,6 +22,23 @@ export function AnalystProvider({ children }: { children: ReactNode }) {
   const analystId = identity?.analyst.id ?? '';
   const signedOutSignal = useMemo(() => new AbortController().signal, []);
   const [analysts, setAnalysts] = useState<Analyst[]>([]);
+  const [restoring, setRestoring] = useState(true);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [restoreAttempt, setRestoreAttempt] = useState(0);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setRestoring(true);
+    setAuthError(null);
+    restoreSession(controller.signal)
+      .catch(() => {
+        if (!controller.signal.aborted) setAuthError('Could not restore your session. Check the API server and retry.');
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setRestoring(false);
+      });
+    return () => controller.abort();
+  }, [restoreAttempt]);
 
   useEffect(() => {
     setAnalysts([]);
@@ -38,10 +58,19 @@ export function AnalystProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo(
     () => ({
-      analystId, analyst: identity?.analyst ?? null, signOut: clearIdentity,
+      analystId, analyst: identity?.analyst ?? null,
+      signOut: async () => {
+        setAuthError(null);
+        try {
+          await signOut();
+        } catch {
+          setAuthError('Signed out of this tab, but server revocation failed. The session may remain valid until it expires.');
+        }
+      },
+      restoring, authError, retryRestore: () => setRestoreAttempt((attempt) => attempt + 1),
       analysts: identity ? analysts : [], identitySignal: identity?.signal ?? signedOutSignal,
     }),
-    [analystId, analysts, identity, signedOutSignal],
+    [analystId, analysts, identity, signedOutSignal, restoring, authError],
   );
 
   return <AnalystContext.Provider value={value}>{children}</AnalystContext.Provider>;

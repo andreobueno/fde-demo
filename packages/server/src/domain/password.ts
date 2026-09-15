@@ -63,7 +63,6 @@ export function verifyPassword(password: string, encoded: string): boolean {
 
 const DECOY_HASH = hashPassword('unused-decoy-password', DEFAULT_SCRYPT_PARAMETERS);
 
-/** Spends comparable work on unknown accounts so failures do not reveal which emails exist. */
 export function spendVerificationWork(password: string): void {
   verifyPassword(password, DECOY_HASH);
 }

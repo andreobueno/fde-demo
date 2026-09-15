@@ -2,6 +2,23 @@
 
 Scope: `packages/server`. The UI (`packages/web`) is a separate workspace that only talks to the HTTP API.
 
+## Local sign-in adapter
+
+`http/auth.ts → services/authService.ts → repo/credentials.ts + repo/sessions.ts`
+verifies local passwords and issues revocable, expiring sessions. Passwords are salted scrypt
+hashes; sessions are opaque bearer tokens with only SHA-256 hashes persisted. Successful session
+creation/revocation and append-only authentication events commit atomically.
+
+The adapter is explicitly enabled in the dev command and prohibited in production. Both SPAs
+use tab/origin-scoped sessionStorage and restore actor/role from `/api/me`; the SSR adapter holds
+the same session in an HttpOnly cookie. Instance isolation changes credential storage, not the
+shared server RBAC, domain services or business audit architecture. Existing automation tokens
+remain a separate credential type.
+
+Production SSO/OIDC can replace the local credential verification/transport while reusing the
+server-resolved analyst context and downstream authorization. Identity-provider integration,
+managed role provisioning and a BFF/cookie security boundary are not implemented here.
+
 ## Request flow
 
 ```mermaid

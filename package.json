@@ -15,6 +15,7 @@
     "lint": "npm run lint -w packages/server && npm run lint -w packages/web",
     "typecheck": "npm run typecheck -w packages/server && npm run typecheck -w packages/web",
     "dev:web": "npm run dev -w packages/web",
+    "dev:web:second": "npm run dev -w packages/web -- --port 5174 --strictPort",
     "build:web": "npm run build -w packages/web",
     "lint:web": "npm run lint -w packages/web",
     "typecheck:web": "npm run typecheck -w packages/web",

@@ -19,7 +19,8 @@ import type {
 } from './types';
 import type { QueueFilters } from '../lib/queueFilters';
 import { queueFiltersToQuery } from '../lib/queueFilters';
-import { beginAuthentication, clearIdentity, completeAuthentication, credentialFor } from './identity';
+import { beginAuthentication, clearIdentity, completeAuthentication, credentialFor, getIdentity } from './identity';
+import { storedSession } from './sessionStorage';
 
 export class ApiError extends Error {
   status: number;
@@ -48,7 +49,7 @@ export async function apiRequest<T>(path: string, options: ApiRequestOptions): P
   options.signal?.throwIfAborted();
   const credential = credentialFor(options.analystId);
   if (!credential) {
-    throw new ApiError(401, 'UNAUTHORIZED', 'Sign in with your access token to continue.');
+    throw new ApiError(401, 'UNAUTHORIZED', 'Sign in to continue.');
   }
   const signal = AbortSignal.any([credential.signal, ...(options.signal ? [options.signal] : [])]);
   try {
@@ -73,6 +74,55 @@ export async function authenticateAccessToken(token: string, signal?: AbortSigna
   return analyst;
 }
 
+interface SignInResponse {
+  analyst: CurrentAnalyst;
+  session: { token: string; expiresAt: string; idleTimeoutMs: number };
+}
+
+export async function signIn(email: string, password: string, signal?: AbortSignal): Promise<void> {
+  signal?.throwIfAborted();
+  const authentication = beginAuthentication();
+  const combined = AbortSignal.any([authentication, ...(signal ? [signal] : [])]);
+  const result = await request<SignInResponse>(
+    '/api/auth/sign-in', '', new AbortController().signal,
+    { method: 'POST', body: { email: email.trim(), password } },
+  );
+  if (combined.aborted) {
+    void revokeSession(result.session.token).catch(() => undefined);
+    combined.throwIfAborted();
+  }
+  completeAuthentication(result.analyst, result.session.token, authentication, true);
+}
+
+export async function restoreSession(signal?: AbortSignal): Promise<void> {
+  signal?.throwIfAborted();
+  const token = storedSession();
+  if (!token) return;
+  const authentication = beginAuthentication(true);
+  const combined = AbortSignal.any([authentication, ...(signal ? [signal] : [])]);
+  try {
+    const analyst = await request<CurrentAnalyst>('/api/me', token, combined);
+    completeAuthentication(analyst, token, authentication, true);
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 401 && !combined.aborted) {
+      clearIdentity();
+      return;
+    }
+    throw error;
+  }
+}
+
+function revokeSession(token: string): Promise<void> {
+  return request<void>('/api/auth/sign-out', token, new AbortController().signal, { method: 'POST' });
+}
+
+export async function signOut(): Promise<void> {
+  const identity = getIdentity();
+  const token = identity ? credentialFor(identity.analyst.id)?.token : null;
+  clearIdentity();
+  if (token) await revokeSession(token);
+}
+
 async function request<T>(
   path: string,
   token: string,
@@ -83,7 +133,7 @@ async function request<T>(
   const method = options.method ?? 'GET';
   const headers: Record<string, string> = {
     'content-type': 'application/json',
-    Authorization: `Bearer ${token}`,
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
     ...(options.analystId ? { 'x-analyst-id': options.analystId } : {}),
   };
 
@@ -122,6 +172,7 @@ async function request<T>(
     throw new ApiError(response.status, code, message, details);
   }
 
+  if (response.status === 204) return undefined as T;
   const result = (await response.json()) as T;
   signal.throwIfAborted();
   return result;

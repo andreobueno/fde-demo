@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { ApiError, authenticateAccessToken } from '../api/client';
+import { ApiError, signIn } from '../api/client';
 
 export function ManualIdentityForm() {
-  const [token, setToken] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const request = useRef<AbortController | null>(null);
@@ -16,17 +17,17 @@ export function ManualIdentityForm() {
     setSubmitting(true);
     setError(null);
     try {
-      await authenticateAccessToken(token, controller.signal);
+      await signIn(email, password, controller.signal);
     } catch (err) {
       if (!controller.signal.aborted) {
         setError(err instanceof ApiError && err.status === 401
-          ? 'Invalid or expired access token. Ask an administrator for a new token.'
+          ? 'Incorrect email or password.'
           : err instanceof Error ? err.message : 'Unexpected error. Please try again.');
       }
     } finally {
       request.current = null;
       if (!controller.signal.aborted) {
-        setToken('');
+        setPassword('');
         setSubmitting(false);
       }
     }
@@ -36,18 +37,29 @@ export function ManualIdentityForm() {
     <section style={{ maxWidth: 640, margin: '48px auto', padding: 24 }} aria-labelledby="sign-in-title">
       <h1 id="sign-in-title">Sign in to Operations</h1>
       <form onSubmit={(event) => { event.preventDefault(); void submit(); }} style={{ marginTop: 8 }}>
-        <p>Enter the access token provided by your administrator. Your role is verified by the server.</p>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <label htmlFor="access-token">Access token</label>
+        <p>Sign in with your email and password. Your permissions are verified by the server.</p>
+        <div style={{ display: 'grid', gap: 12 }}>
+          <label htmlFor="sign-in-email">Email</label>
           <input
-            id="access-token"
+            id="sign-in-email"
+            type="email"
+            value={email}
+            onChange={(event) => { setEmail(event.target.value); setError(null); }}
+            autoComplete="username"
+            disabled={submitting}
+            maxLength={254}
+            required
+          />
+          <label htmlFor="sign-in-password">Password</label>
+          <input
+            id="sign-in-password"
             type="password"
-            value={token}
-            onChange={(event) => { setToken(event.target.value); setError(null); }}
-            autoComplete="off"
+            value={password}
+            onChange={(event) => { setPassword(event.target.value); setError(null); }}
+            autoComplete="current-password"
             spellCheck={false}
             disabled={submitting}
-            maxLength={128}
+            maxLength={256}
             required
             aria-invalid={error !== null}
             aria-describedby={error ? 'manual-analyst-error' : undefined}
@@ -60,7 +72,18 @@ export function ManualIdentityForm() {
           <p id="manual-analyst-error" role="alert" style={{ color: 'var(--color-danger)' }}>{error}</p>
         ) : null}
       </form>
-      <p>Credentials stay in memory. Refreshing the page or switching users requires signing in again.</p>
+      {import.meta.env.DEV ? (
+        <aside aria-label="Local demo accounts" style={{ marginTop: 24 }}>
+          <h2>Local demo accounts</h2>
+          <p>All use password <code>demo-password-2026</code>. Fictional accounts for local evaluation only.</p>
+          <ul>
+            <li>Analyst: <code>grete.lindholm@northwind-demo.example</code></li>
+            <li>Senior analyst: <code>marta.ellison@northwind-demo.example</code></li>
+            <li>Compliance manager: <code>sofia.chen@northwind-demo.example</code></li>
+          </ul>
+        </aside>
+      ) : null}
+      <p>This tab keeps its own session across refreshes. Open another local port in a new tab to sign in as a different user.</p>
     </section>
   );
 }

@@ -19,14 +19,14 @@ npm workspaces monorepo:
 
 ### UI (`packages/web`)
 
-Minimal SPA: a case queue at `/`, case detail at `/cases/:id`, refund queue at `/refunds`, refund detail at `/refunds/:id`, and KYC policy at `/policy`. Both queues use the same table, filter chips, debounced search and pagination components; both detail pages use the same decision dialog and audit timeline. Plain CSS, no UI kit or data-fetching library. The dev server runs on `http://localhost:5173` and proxies `/api/*` to the API on port 4000. Sign-in verifies an administrator-issued access token; the server determines the current identity and permissions. The token stays in memory, so refreshing the page requires signing in again. Production build emits `packages/web/dist/`.
+Minimal SPA: a case queue at `/`, case detail at `/cases/:id`, refund queue at `/refunds`, refund detail at `/refunds/:id`, and KYC policy at `/policy`. Both queues use the same table, filter chips, debounced search and pagination components; both detail pages use the same decision dialog and audit timeline. Plain CSS, no UI kit or data-fetching library. The dev server runs on `http://localhost:5173` and proxies `/api/*` to the API on port 4000. Local email/password sign-in creates a server-verified session; refresh restores the identity from the server. Each local port can stay signed in as a different user. Production build emits `packages/web/dist/`.
 
 Two alternative UIs were built and evaluated; they are kept as reference implementations under `variants/`:
 
 - `variants/web-b` — component-library SPA: Tailwind CSS, shadcn-style primitives on Radix, TanStack Query + Table. Run: `npm run dev:web-b`.
 - `variants/web-c` — server-rendered: Express SSR + React 19 + htmx on port 3000. Run: `npm run dev:web-c`.
 
-The reference UIs use the same API credentials. SSR cookies require HTTPS by default; see
+The reference UIs use the same password/session API. SSR cookies require HTTPS by default; see
 [`variants/web-c/README.md`](variants/web-c/README.md) for the explicit local HTTP option.
 
 web-a was selected as the default: same features, simplest stack, fewest dependencies.
@@ -40,30 +40,78 @@ web-a was selected as the default: same features, simplest stack, fewest depende
 
 ```bash
 npm install          # installs all workspaces
-npm run seed         # DESTRUCTIVE: reset fictional KYC, refunds and audit data
-mkdir -p -m 700 .auth
-npm run auth:issue -w packages/server -- ana-003 "$PWD/.auth/analyst.token"
-npm run dev:server   # API on http://localhost:4000 (override with PORT)
+npm run seed         # DESTRUCTIVE: reset fictional KYC, refunds, audit data and demo logins
+npm run dev:server   # API on http://localhost:4000; enables LOCAL_DEMO_AUTH=true
 npm run dev:web      # UI dev server on http://localhost:5173 (see UI section above)
 ```
 
-Run the two dev servers in separate terminals. Open the UI and enter the token from
-`.auth/analyst.token`. Token files are private (`0600`) and `.auth/` is ignored by Git.
-The issuer refuses to overwrite a file and prints only its path and expiry. Seeded identities
-have **no default credentials**. To try elevated roles, issue another token for `ana-001`
-(senior analyst) or `ana-006` (manager) to a different output file.
+Run the two dev servers in separate terminals. For an existing fictional database, use
+`npm run seed:logins` instead of `npm run seed`: it adds/resets demo passwords and revokes
+browser sessions while preserving cases, refund decisions and business audit history.
+It provisions only identities already in that database; use the command's printed emails for
+older databases that do not include every account below.
 
-Tokens expire after eight hours. An administrator with database access can revoke every token
-for an identity:
+Sign in with one of these fictional accounts and the shared **local demo password**
+`demo-password-2026`. No token issuance or copying is needed.
+
+| Email | Role |
+| --- | --- |
+| `grete.lindholm@northwind-demo.example` | Analyst |
+| `marta.ellison@northwind-demo.example` | Senior analyst |
+| `sofia.chen@northwind-demo.example` | Compliance manager |
+
+The other seeded accounts also have logins; the seed command lists their emails. Use
+**Sign out / switch user**, then sign in with another email. Logout revokes only that browser
+session, leaving other signed-in instances active. Sessions expire after one idle hour or
+12 hours total. A refresh checks `/api/me` before showing sensitive data.
+
+### Two local instances, two users
+
+Keep one API running. Start these in separate terminals:
 
 ```bash
-npm run auth:revoke -w packages/server -- ana-003
+npm run dev:web          # http://localhost:5173
+npm run dev:web:second   # http://localhost:5174
 ```
 
-The API and credential commands must use the same `KYC_DB_PATH` if overriding the default.
-Full seeding removes credentials along with the fictional database; issue new credentials after a reset.
-Signing out clears the UI session; use the revoke command to invalidate a copied token.
-Use HTTPS whenever credentials leave the local machine.
+Open each URL in its own tab. Sign in as Grete on port 5173 and Sofia on port 5174.
+Both see the same fictional data, with their own server-enforced permissions. Switching
+or signing out on one port does not change the other session. The strict port setting
+prevents Vite from silently choosing a different port.
+
+SPA credentials use `sessionStorage`, which is isolated by origin **including port** and
+by tab; no cookie is shared across these SPA instances. The password and actor/role are never
+persisted in browser storage. A newly opened tab starts signed out, but browsers may copy
+storage when duplicating an existing tab; use the two distinct URLs above for this demo.
+SSR uses HttpOnly cookies with a per-instance name; see its README before running two SSR instances.
+
+### Authentication scope
+
+This is an explicit **local development authentication adapter**, not production identity
+management. `npm run dev:server` enables it. Normal server startup leaves it disabled;
+`NODE_ENV=production` rejects enabling it, and all demo seeding rejects production.
+An existing demo session cannot authenticate when the adapter is disabled.
+Do not expose this public-password demo API to untrusted networks.
+
+For production, integrate SSO/OIDC (for example Entra ID), controlled role provisioning,
+MFA, and managed server sessions behind HTTPS. SPA `sessionStorage` is readable by JavaScript:
+an XSS bug can steal a local session. A production BFF with HttpOnly/Secure cookies and
+reviewed CSRF protection should replace this browser credential transport.
+The server permission and audit boundaries remain reusable.
+
+Bearer credentials remain available for API automation (eight-hour expiry); they are
+separate from browser sessions. For an optional CLI smoke test:
+
+```bash
+mkdir -p -m 700 .auth
+npm run auth:issue -w packages/server -- ana-003 "$PWD/.auth/analyst.token"
+# Later, revoke automation credentials with:
+# npm run auth:revoke -w packages/server -- ana-003
+```
+
+The API and seed/credential commands must use the same `KYC_DB_PATH` if overriding the default.
+Full seeding removes all old credentials and sessions. Use HTTPS whenever credentials leave
+the local machine.
 
 For an existing fictional demo database, run `npm run seed:refunds` to add refund fixtures
 without resetting KYC, existing refund decisions or audit history. Startup applies the schema
@@ -80,7 +128,7 @@ npm run typecheck    # tsc --noEmit: server + web
 
 Per-variant equivalents exist for the alternative UIs (`npm run test:web-b`, `npm run typecheck:web-c`, etc.).
 
-Environment variables (server): `PORT` (default `4000`), `KYC_DB_PATH` (default `packages/server/data/kyc.db`; `:memory:` supported).
+Environment variables (server): `PORT` (default `4000`), `KYC_DB_PATH` (default `packages/server/data/kyc.db`; `:memory:` supported), `LOCAL_DEMO_AUTH` (default off; dev script enables it).
 
 Quick smoke test after `npm run dev:server`:
 
@@ -220,19 +268,24 @@ Hash verification detects altered hashed fields and broken links. It cannot dete
 
 ## Identity model
 
-All sensitive API reads and writes require `Authorization: Bearer <token>`; only health is anonymous.
+All sensitive API reads and writes require `Authorization: Bearer <token>`. Health and the
+explicitly enabled local sign-in/sign-out routes are anonymous.
 Credentials contain 32 random bytes encoded as base64url. SQLite stores their SHA-256 hashes,
 identity association and expiry. Revocation deletes the stored hash. Missing, invalid, expired or revoked credentials
 return `401`. The optional `x-analyst-id` is only an expected-identity guard: a mismatch returns
 `403` and never changes the authenticated actor. There is no header-only bypass.
 
 The server loads current roles from the database and re-resolves actors inside mutation transactions.
-Switching users requires signing out and supplying the new user's credential. Sensitive pages,
+Switching users requires signing out and signing in with the new user's email/password. Sensitive pages,
 dialogs and requests are cleared on sign-out, and late responses cannot restore a previous identity.
 A request already committed server-side retains its original actor.
 
-This closes the demo impersonation path. Production still needs SSO/OIDC, MFA, controlled identity
-and role provisioning, managed credential delivery/rotation, authentication audit events and
+Supplying an analyst ID alone cannot grant privileges. Public demo passwords intentionally permit
+local role evaluation; they are not a production access boundary. Successful/failed/throttled logins
+and logout are recorded in a separate append-only `auth_events` table without passwords or tokens.
+Successful login/logout and their audit writes are atomic.
+Production still needs SSO/OIDC, MFA, controlled identity
+and role provisioning, managed sessions and
 deployment controls described in [`docs/SECURITY_REVIEW.md`](docs/SECURITY_REVIEW.md).
 
 Seeded identities:

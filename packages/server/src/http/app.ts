@@ -103,7 +103,13 @@ export function createApp(
     res.json({ ok: true });
   });
 
-  if (localAuth) app.use('/api/auth', authRoutes(db));
+  if (localAuth) {
+    app.use('/api/auth', authRoutes(db));
+  } else {
+    app.use('/api/auth', (_req, _res, next) => next(new ApiError(
+      404, 'LOCAL_AUTH_DISABLED', 'Local sign-in is disabled. Start the development API for the demo.',
+    )));
+  }
   app.use('/api', resolveAnalyst);
   app.use(express.json({ limit: '50kb' }));
   app.use('/api/refunds', refundRoutes(db, requirePermission));

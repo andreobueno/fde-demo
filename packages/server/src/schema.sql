@@ -217,7 +217,7 @@ CREATE TABLE IF NOT EXISTS auth_events (
   event TEXT NOT NULL CHECK (
     event IN ('sign_in_succeeded', 'sign_in_failed', 'sign_in_throttled', 'sign_out')
   ),
-  analyst_id TEXT REFERENCES analysts(id) ON DELETE SET NULL,
+  analyst_id TEXT REFERENCES analysts(id),
   email TEXT,
   reason TEXT
 );
