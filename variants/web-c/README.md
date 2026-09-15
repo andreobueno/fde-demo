@@ -10,7 +10,7 @@ dialog and the post-action refresh; every interaction also works as a plain form
 ```bash
 npm install                 # repo root
 npm run seed                # populate packages/server/data/kyc.db
-npm run seed:logins         # non-destructively provision fictional local users
+# Existing DB instead: npm run seed:logins (resets passwords/sessions, preserves business data)
 npm run dev:server          # API on http://localhost:4000
 npm run dev:local -w variants/web-c  # explicit local HTTP opt-in on http://localhost:3000
 PORT=3001 npm run dev:local -w variants/web-c  # independent second console

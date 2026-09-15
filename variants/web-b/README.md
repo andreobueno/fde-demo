@@ -2,7 +2,7 @@
 
 ## How to run
 
-From the repository root, provision the fictional analysts' local logins with `npm run seed:logins` after the database has been seeded. This command is non-destructive. Start the API with `npm run dev:server`, then run `npm run dev:web-b`. The SPA is available at `http://localhost:5173`.
+From the repository root, provision an existing fictional database's logins with `npm run seed:logins`. This resets demo passwords and browser sessions while preserving business data; a fresh `npm run seed` already includes logins. Start the API with `npm run dev:server`, then run `npm run dev:web-b`. The SPA is available at `http://localhost:5173`.
 
 For simultaneous users, run another instance with `npm run dev -w variants/web-b -- --port 5174 --strictPort`. Sign in separately on each port; both frontends can use the API on port 4000. Independently opened tabs also have separate sessionStorage. Browser “duplicate tab” or opener-created tabs can initially copy sessionStorage: open a fresh tab independently for a different user, rather than duplicating an authenticated tab.
 
