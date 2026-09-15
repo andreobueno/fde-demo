@@ -13,7 +13,7 @@ and bearer authentication in [1b4d745](https://github.com/andreobueno/fde-demo/c
 - High-risk approval required a note only before escalation; there was no manager role, permission matrix or policy-management boundary.
 - The write service accepted an actor object without reloading its role/name from storage.
 - Case actions already appended server-side audit events transactionally, and update/delete triggers already existed. Those protections were retained and rollback/identity/replacement protections gained regression tests.
-- The UI could retain case data and an action dialog while identity changed; an empty action list was incorrectly described as a closed case.
+- The selected UI could retain case data and an action dialog while identity changed; an empty action list was incorrectly described as a closed case.
 - The initial RBAC implementation trusted a caller-selected analyst ID. Requiring that header prevented anonymous reads, but anyone knowing a manager ID could still impersonate that manager.
 
 ## Current implementation
@@ -148,6 +148,14 @@ Sources: [`password.ts`](../packages/server/src/domain/password.ts),
 
 Managers can require or waive notes for low/medium approvals. High-risk approval always requires a manager and a trimmed 10–1000 character justification, including escalated cases. Reject/escalate always require 10–1000 characters.
 
+These are server rules. Reference web-b's [local validator](../variants/web-b/src/lib/actionRules.ts)
+does not consume `approvalNoteRequired`: low/medium approval permits an empty note locally, and
+high-risk approval requires only one trimmed character. The API rejects notes that violate its
+current rules, with the dialog displaying the returned error. Web-b also still labels any empty
+action list as “Case closed” in its [detail page](../variants/web-b/src/pages/CaseDetailPage.tsx),
+even when an open case has no actions available to that role. These reference-client gaps
+do not grant additional server permissions.
+
 This approval-note policy uses `/api/policy` and singleton `review_policy` (initial version 1).
 Updates require the current version and a trimmed 10–1000 character reason. Each change records
 actor ID/name/role, action, timestamp, complete before/after snapshots and hash links in
@@ -225,7 +233,7 @@ workflow is tracked here.
 - Case/refund/both-policy transaction rollback when event insertion fails.
 - Audit update/delete/replace protection and duplicate terminal decisions.
 - Existing-database migration preserving stored records and hashes, repeated startup and failed migration rollback.
-- Web credential headers, tab/origin session storage, verified restoration, sign-in gating, request cancellation, late-response isolation and server-supplied note rules.
+- Web credential headers, tab/origin session storage, verified restoration, sign-in gating, request cancellation and late-response isolation; selected-SPA/SSR tests cover server-supplied note rules.
 - SSR secure-cookie defaults/local opt-in, origin checks, stale/invalid cookies, configured namespaces and restricted-case messaging.
 - Persisted risk evidence/thresholds, changed-evidence rescoring, closed-case preservation and additive refund/login reseeding.
 

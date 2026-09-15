@@ -73,6 +73,13 @@ Example: `POST /api/cases/:id/actions`
 
 `PUT /api/policy` requires `policy:manage`, a change reason and the current version. `policyService` reloads the actor, validates permission/version, and commits the updated setting with a hash-linked before/after audit event in one immediate transaction. High-risk decision permissions and note requirements are fixed in the authorization domain and cannot be relaxed by this setting.
 
+The selected SPA and SSR client use the API's `approvalNoteRequired` flag. Reference web-b still
+uses older [local note rules](../variants/web-b/src/lib/actionRules.ts): it allows an empty
+low/medium approval note and accepts a high-risk approval note with one trimmed character.
+Its [dialog](../variants/web-b/src/components/ActionDialog.tsx) does not consume the policy flag,
+so API validation can reject submissions that its local validator accepts. The server enforces
+the current policy and the 10–1000 character requirement; client behavior is not uniform.
+
 Risk-scoring policy is separate: `PUT /api/risk-policy` calls `riskPolicyService`, with the same
 identity and manager permission. Its transaction saves rule weights/thresholds, re-evaluates open
 cases, captures thresholds in `case_risk_thresholds`, appends case audit events for changed
@@ -166,7 +173,7 @@ replace its score, factor weights or evidence links.
 `validateAction`, `getAllowedActions`, `computeRisk*` and `computeEventHash` take plain values and return plain values. Consequences:
 
 - Table-driven tests (`domain/*.test.ts`) cover transition × role × risk combinations without a database.
-- Read responses and writes share permission/transition rules. A UI can still become stale between requests; writes recheck the current role, state, risk and note policy.
+- API read responses and writes share permission/transition rules. A UI can still become stale between requests or implement older local validation; writes recheck the current role, state, risk and note policy.
 - Managers can change configured weights without a code edit. Adding a predicate or role still requires coordinated domain, schema/type and test changes.
 - Plain-value rule inputs support reuse; Node crypto helpers and module dependencies still need consideration before moving code into a browser.
 
