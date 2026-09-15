@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { getMe, restoreSession, signIn, signOut } from './client';
+import { getMe, restoreSession, signIn, signInDemoUser, signOut } from './client';
 import { clearIdentity, getIdentity } from './identity';
 import { storedSession } from './sessionStorage';
 import type { CurrentAnalyst } from './types';
@@ -41,6 +41,51 @@ beforeEach(() => {
 afterEach(() => { clearIdentity(); vi.unstubAllGlobals(); });
 
 describe('local password sessions', () => {
+  it('verifies a chosen mock user through /api/me before installing the server identity', async () => {
+    fetchMock
+      .mockResolvedValueOnce(login(analyst))
+      .mockResolvedValueOnce(Response.json(manager));
+    await signInDemoUser('admin');
+    expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/auth/sign-in', expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({
+        email: 'sofia.chen@northwind-demo.example',
+        password: 'demo-password-2026',
+      }),
+      headers: { 'content-type': 'application/json' },
+    }));
+    expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/me', expect.objectContaining({
+      headers: {
+        'content-type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+    }));
+    expect(getIdentity()?.analyst).toEqual(manager);
+    expect(storedSession()).toBe(token);
+  });
+
+  it('rejects an unknown mock user before sending credentials', async () => {
+    await expect(signInDemoUser('compliance_manager')).rejects.toMatchObject({
+      status: 400,
+      code: 'VALIDATION_ERROR',
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(getIdentity()).toBeNull();
+  });
+
+  it('revokes a mock-user session that fails the /api/me identity check', async () => {
+    fetchMock
+      .mockResolvedValueOnce(login(analyst))
+      .mockResolvedValueOnce(Response.json({}, { status: 401 }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    await expect(signInDemoUser('analyst')).rejects.toMatchObject({ status: 401 });
+    expect(getIdentity()).toBeNull();
+    expect(storedSession()).toBeNull();
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/auth/sign-out', expect.objectContaining({
+      headers: expect.objectContaining({ Authorization: `Bearer ${token}` }),
+    }));
+  });
+
   it('uses normal credentials and stores only the issued token in this tab', async () => {
     fetchMock.mockResolvedValueOnce(login());
     await signIn('  analyst@example.test  ', password);

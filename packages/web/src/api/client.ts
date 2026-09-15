@@ -21,6 +21,7 @@ import type { QueueFilters } from '../lib/queueFilters';
 import { queueFiltersToQuery } from '../lib/queueFilters';
 import { beginAuthentication, clearIdentity, completeAuthentication, credentialFor, getIdentity } from './identity';
 import { storedSession } from './sessionStorage';
+import { DEMO_USERS } from './demoUsers';
 
 export class ApiError extends Error {
   status: number;
@@ -79,7 +80,12 @@ interface SignInResponse {
   session: { token: string; expiresAt: string; idleTimeoutMs: number };
 }
 
-export async function signIn(email: string, password: string, signal?: AbortSignal): Promise<void> {
+async function establishPasswordSession(
+  email: string,
+  password: string,
+  signal?: AbortSignal,
+  verifySession = false,
+): Promise<void> {
   signal?.throwIfAborted();
   const authentication = beginAuthentication();
   const combined = AbortSignal.any([authentication, ...(signal ? [signal] : [])]);
@@ -91,7 +97,30 @@ export async function signIn(email: string, password: string, signal?: AbortSign
     void revokeSession(result.session.token).catch(() => undefined);
     combined.throwIfAborted();
   }
-  completeAuthentication(result.analyst, result.session.token, authentication, true);
+  try {
+    const analyst = verifySession
+      ? await request<CurrentAnalyst>('/api/me', result.session.token, combined)
+      : result.analyst;
+    completeAuthentication(analyst, result.session.token, authentication, true);
+  } catch (error) {
+    await revokeSession(result.session.token).catch(() => undefined);
+    throw error;
+  }
+}
+
+export function signIn(email: string, password: string, signal?: AbortSignal): Promise<void> {
+  return establishPasswordSession(email, password, signal);
+}
+
+export function signInDemoUser(userId: string, signal?: AbortSignal): Promise<void> {
+  if (!import.meta.env.DEV) {
+    return Promise.reject(new ApiError(404, 'LOCAL_AUTH_DISABLED', 'Mock-user sign-in is available only in local development.'));
+  }
+  const user = DEMO_USERS.find(({ id }) => id === userId);
+  if (!user) {
+    return Promise.reject(new ApiError(400, 'VALIDATION_ERROR', 'Choose a valid mock user.'));
+  }
+  return establishPasswordSession(user.email, 'demo-password-2026', signal, true);
 }
 
 export async function restoreSession(signal?: AbortSignal): Promise<void> {

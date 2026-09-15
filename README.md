@@ -19,7 +19,7 @@ npm workspaces monorepo:
 
 ### UI (`packages/web`)
 
-Minimal SPA: a case queue at `/`, case detail at `/cases/:id`, refund queue at `/refunds`, refund detail at `/refunds/:id`, and KYC policy at `/policy`. Both queues use the same table, filter chips, debounced search and pagination components; both detail pages use the same decision dialog and audit timeline. Plain CSS, no UI kit or data-fetching library. The dev server runs on `http://localhost:5173` and proxies `/api/*` to the API on port 4000. Local email/password sign-in creates a server-verified session; refresh restores the identity from the server. Each local port can stay signed in as a different user. Production build emits `packages/web/dist/`.
+Minimal SPA: a case queue at `/`, case detail at `/cases/:id`, refund queue at `/refunds`, refund detail at `/refunds/:id`, and KYC policy at `/policy`. Both queues use the same table, filter chips, debounced search and pagination components; both detail pages use the same decision dialog and audit timeline. Plain CSS, no UI kit or data-fetching library. The dev server runs on `http://localhost:5173` and proxies `/api/*` to the API on port 4000. A local role picker maps fictional users to the password/session adapter and verifies the issued session through `/api/me`; refresh restores the identity from the server. Each local port can stay signed in as a different user. Production build emits `packages/web/dist/`.
 
 Two alternative UIs were built and evaluated; they are kept as reference implementations under `variants/`:
 
@@ -51,19 +51,19 @@ browser sessions while preserving cases, refund decisions and business audit his
 It provisions only identities already in that database; use the command's printed emails for
 older databases that do not include every account below.
 
-Sign in with one of these fictional accounts and the shared **local demo password**
-`demo-password-2026`. No token issuance or copying is needed.
+Choose one of these fictional users from the local role picker and click **Log in**. The selected
+label is a convenience mapping to the existing seeded credentials; it is not sent as an
+authoritative role or analyst ID.
 
-| Email | Role |
-| --- | --- |
-| `grete.lindholm@northwind-demo.example` | Analyst |
-| `marta.ellison@northwind-demo.example` | Senior analyst |
-| `sofia.chen@northwind-demo.example` | Compliance manager |
+| Picker label | Seeded account | Server role |
+| --- | --- | --- |
+| Analyst | Grete Lindholm | `analyst` |
+| Reviewer | Marta Ellison | `senior_analyst` |
+| Admin | Sofia Chen | `compliance_manager` |
 
-The other seeded accounts also have logins; the seed command lists their emails. Use
-**Sign out / switch user**, then sign in with another email. Logout revokes only that browser
+Use **Sign out / switch user**, then choose another mock user. Logout revokes only that browser
 session, leaving other signed-in instances active. Sessions expire after one idle hour or
-12 hours total. A refresh checks `/api/me` before showing sensitive data.
+12 hours total. Initial login and refresh both check `/api/me` before showing sensitive data.
 
 ### Two local instances, two users
 
@@ -74,12 +74,12 @@ npm run dev:web          # http://localhost:5173
 npm run dev:web:second   # http://localhost:5174
 ```
 
-Open each URL in its own tab. Sign in as Grete on port 5173 and Sofia on port 5174.
+Open each URL in its own tab. Choose Analyst on port 5173 and Admin on port 5174.
 Both see the same fictional data, with their own server-enforced permissions. Switching
 or signing out on one port does not change the other session. The strict port setting
 prevents Vite from silently choosing a different port.
 
-SPA credentials use `sessionStorage`, which is isolated by origin **including port** and
+SPA session tokens use `sessionStorage`, which is isolated by origin **including port** and
 by tab; no cookie is shared across these SPA instances. The password and actor/role are never
 persisted in browser storage. A newly opened tab starts signed out, but browsers may copy
 storage when duplicating an existing tab; use the two distinct URLs above for this demo.
@@ -276,12 +276,13 @@ return `401`. The optional `x-analyst-id` is only an expected-identity guard: a 
 `403` and never changes the authenticated actor. There is no header-only bypass.
 
 The server loads current roles from the database and re-resolves actors inside mutation transactions.
-Switching users requires signing out and signing in with the new user's email/password. Sensitive pages,
+Switching users requires signing out and choosing another local mock user. Sensitive pages,
 dialogs and requests are cleared on sign-out, and late responses cannot restore a previous identity.
 A request already committed server-side retains its original actor.
 
-Supplying an analyst ID alone cannot grant privileges. Public demo passwords intentionally permit
-local role evaluation; they are not a production access boundary. Successful/failed/throttled logins
+Supplying an analyst ID or role label alone cannot grant privileges. The selected SPA's picker
+maps its label to seeded credentials, then installs only the identity returned by `/api/me`.
+Public demo passwords intentionally permit local role evaluation; they are not a production access boundary. Successful/failed/throttled logins
 and logout are recorded in a separate append-only `auth_events` table without passwords or tokens.
 Successful login/logout and their audit writes are atomic.
 Production still needs SSO/OIDC, MFA, controlled identity
