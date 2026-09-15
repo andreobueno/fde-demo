@@ -31,35 +31,69 @@ describe('sign-in boundary', () => {
     expect(queryClient.getQueryCache().getAll()).toHaveLength(0);
   });
 
-  it('renders a password input with no serialized credential and useful sign-in guidance', () => {
+  it('renders accessible email/password inputs with no serialized credential and local guidance', () => {
     const html = renderToStaticMarkup(
       <SignInPage pending={false} error={null} onSignIn={vi.fn()} onCancel={vi.fn()} />,
     );
     expect(html).toContain('type="password"');
-    expect(html).toContain('autoComplete="off"');
+    expect(html).toContain('type="email"');
+    expect(html).toContain('for="email"');
+    expect(html).toContain('for="password"');
+    expect(html).toContain('autoComplete="username"');
+    expect(html).toContain('autoComplete="current-password"');
     expect(html).not.toMatch(/\bvalue=/);
-    expect(html).toContain('administrator');
-    expect(html).toContain('memory only');
+    expect(html).not.toContain('access-token');
+    expect(html).toContain('sessionStorage');
+    expect(html).toContain('JavaScript');
     expect(html).toContain('switch users');
+    expect(html).toContain('grete.lindholm@northwind-demo.example');
+    expect(html).toContain('marta.ellison@northwind-demo.example');
+    expect(html).toContain('sofia.chen@northwind-demo.example');
+    expect(html).toContain('demo-password-2026');
+    expect(html).toContain('rejected in production');
     expect(html).not.toContain('combobox');
   });
 
-  it('allows cancellation while verifying and renders rejected-token guidance', () => {
+  it('allows cancellation during sign-in and renders incorrect-credentials guidance', () => {
     const pendingHtml = renderToStaticMarkup(
       <SignInPage pending error={null} onSignIn={vi.fn()} onCancel={vi.fn()} />,
     );
-    expect(pendingHtml).toContain('Verifying');
+    expect(pendingHtml).toContain('Signing in');
     expect(pendingHtml).toContain('Cancel');
     expect(pendingHtml).toContain('disabled=""');
     const errorHtml = renderToStaticMarkup(
       <SignInPage
         pending={false}
-        error="Token expired. Please sign in again."
+        error="Incorrect email or password."
         onSignIn={vi.fn()}
         onCancel={vi.fn()}
       />,
     );
     expect(errorHtml).toContain('role="alert"');
-    expect(errorHtml).toContain('Token expired');
+    expect(errorHtml).toContain('Incorrect email or password');
+  });
+
+  it('announces restoration and prevents a competing form submission until cancelled', () => {
+    const html = renderToStaticMarkup(
+      <SignInPage restoring pending={false} error={null} onSignIn={vi.fn()} onCancel={vi.fn()} />,
+    );
+    expect(html).toContain('role="status"');
+    expect(html).toContain('Restoring your session');
+    expect(html).toContain('aria-busy="true"');
+    expect(html).toContain('disabled=""');
+    expect(html).toContain('Cancel');
+  });
+
+  it('renders revocation failure on the signed-out screen', () => {
+    const html = renderToStaticMarkup(
+      <SignInPage
+        pending={false}
+        error="Server session revocation could not be confirmed."
+        onSignIn={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+    expect(html).toContain('role="alert"');
+    expect(html).toContain('revocation could not be confirmed');
   });
 });

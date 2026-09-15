@@ -2,7 +2,7 @@ import { Link, Outlet } from 'react-router-dom';
 import { useAnalyst } from '@/lib/analyst';
 import { Button } from '@/components/ui/button';
 export function AppLayout() {
-  const { user, signOut } = useAnalyst();
+  const { user, signOut, error } = useAnalyst();
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
       <header className="border-b bg-white">
@@ -26,6 +26,11 @@ export function AppLayout() {
         </div>
       </header>
       <main className="mx-auto max-w-[1500px] px-6 py-8">
+        {error && (
+          <p role="alert" className="mb-4 text-sm text-red-700">
+            {error}
+          </p>
+        )}
         <Outlet />
       </main>
     </div>

@@ -21,6 +21,51 @@ export class ApiRequestError extends Error {
   }
 }
 
+export function isSessionToken(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Za-z0-9_-]{43}$/.test(value);
+}
+
+async function responseBody(response: Response): Promise<unknown> {
+  const text = await response.text();
+  let body: unknown;
+  try {
+    body = text ? (JSON.parse(text) as unknown) : undefined;
+  } catch {
+    body = undefined;
+  }
+  if (!response.ok) {
+    const errorBody = body as ApiError | undefined;
+    throw new ApiRequestError(
+      errorBody?.error?.message ?? `Request failed with status ${response.status}`,
+      response.status,
+      errorBody?.error?.code ?? 'API_ERROR',
+      errorBody?.error?.details,
+    );
+  }
+  return body;
+}
+
+export async function signInRequest(
+  email: string,
+  password: string,
+  signal: AbortSignal,
+): Promise<unknown> {
+  try {
+    const response = await fetch('/api/auth/sign-in', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+      signal,
+      credentials: 'omit',
+      cache: 'no-store',
+    });
+    return await responseBody(response);
+  } catch (error) {
+    if (error instanceof ApiRequestError) throw error;
+    throw new ApiRequestError('API unreachable', 0, 'API_UNREACHABLE');
+  }
+}
+
 export async function apiFetch<T>(
   path: string,
   credential: ApiCredential | null,
@@ -28,12 +73,8 @@ export async function apiFetch<T>(
 ): Promise<T> {
   if (credential?.signal.aborted || init.signal?.aborted)
     throw new DOMException('Request cancelled', 'AbortError');
-  if (!credential || !/^[A-Za-z0-9_-]{43}$/.test(credential.token))
-    throw new ApiRequestError(
-      'A valid access token is required. Please sign in.',
-      401,
-      'UNAUTHORIZED',
-    );
+  if (!credential || !isSessionToken(credential.token))
+    throw new ApiRequestError('A valid session is required. Please sign in.', 401, 'UNAUTHORIZED');
 
   const headers = new Headers(init.headers);
   headers.set('Authorization', `Bearer ${credential.token}`);
@@ -50,7 +91,7 @@ export async function apiFetch<T>(
   };
   try {
     let response: Response;
-    let text: string;
+    let body: unknown;
     try {
       response = await fetch(path, {
         ...init,
@@ -60,26 +101,12 @@ export async function apiFetch<T>(
         cache: 'no-store',
       });
       checkCancelled();
-      text = await response.text();
+      body = await responseBody(response);
       checkCancelled();
-    } catch {
+    } catch (error) {
       checkCancelled();
+      if (error instanceof ApiRequestError) throw error;
       throw new ApiRequestError('API unreachable', 0, 'API_UNREACHABLE');
-    }
-    let body: unknown;
-    try {
-      body = text ? (JSON.parse(text) as unknown) : undefined;
-    } catch {
-      body = undefined;
-    }
-    if (!response.ok) {
-      const errorBody = body as ApiError | undefined;
-      throw new ApiRequestError(
-        errorBody?.error?.message ?? `Request failed with status ${response.status}`,
-        response.status,
-        errorBody?.error?.code ?? 'API_ERROR',
-        errorBody?.error?.details,
-      );
     }
     return body as T;
   } finally {

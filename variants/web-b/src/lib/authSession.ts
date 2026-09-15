@@ -1,9 +1,16 @@
 import type { QueryClient } from '@tanstack/react-query';
-import { apiFetch, ApiRequestError, type ApiCredential, type ApiRequest } from '@/api/client';
+import {
+  apiFetch,
+  ApiRequestError,
+  isSessionToken,
+  signInRequest,
+  type ApiCredential,
+  type ApiRequest,
+} from '@/api/client';
 import type { CurrentAnalyst } from '@/api/types';
 
 export interface AuthState {
-  status: 'signed_out' | 'signing_in' | 'authenticated';
+  status: 'signed_out' | 'signing_in' | 'restoring' | 'authenticated';
   user: CurrentAnalyst | null;
   error: string | null;
   generation: number;
@@ -11,6 +18,53 @@ export interface AuthState {
 }
 
 const unauthenticatedRequest: ApiRequest = (path, init) => apiFetch(path, null, init);
+export const SESSION_STORAGE_KEY = 'kyc.web-b.session';
+type SessionStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
+type ActiveSession = { credential: ApiCredential; controller: AbortController };
+
+function browserStorage(): SessionStorage | null {
+  try {
+    return typeof window === 'undefined' ? null : window.sessionStorage;
+  } catch {
+    return null;
+  }
+}
+
+function sessionToken(value: unknown): string | null {
+  if (
+    typeof value === 'object' &&
+    value !== null &&
+    'session' in value &&
+    typeof value.session === 'object' &&
+    value.session !== null &&
+    'token' in value.session &&
+    isSessionToken(value.session.token)
+  )
+    return value.session.token;
+  return null;
+}
+
+function isSignInResponse(
+  value: unknown,
+): value is { analyst: CurrentAnalyst; session: { token: string } } {
+  return (
+    sessionToken(value) !== null &&
+    typeof value === 'object' &&
+    value !== null &&
+    'analyst' in value &&
+    isCurrentAnalyst(value.analyst) &&
+    'session' in value &&
+    typeof value.session === 'object' &&
+    value.session !== null &&
+    'expiresAt' in value.session &&
+    typeof value.session.expiresAt === 'string' &&
+    Number.isFinite(Date.parse(value.session.expiresAt)) &&
+    'idleTimeoutMs' in value.session &&
+    typeof value.session.idleTimeoutMs === 'number' &&
+    Number.isFinite(value.session.idleTimeoutMs) &&
+    value.session.idleTimeoutMs > 0
+  );
+}
 
 function isCurrentAnalyst(value: unknown): value is CurrentAnalyst {
   return (
@@ -33,18 +87,19 @@ function isCurrentAnalyst(value: unknown): value is CurrentAnalyst {
 
 export class AuthSession {
   private state: AuthState = {
-    status: 'signed_out',
+    status: 'restoring',
     user: null,
     error: null,
     generation: 0,
     request: unauthenticatedRequest,
   };
-  private active: { credential: ApiCredential; controller: AbortController } | null = null;
+  private active: ActiveSession | null = null;
   private listeners = new Set<() => void>();
 
   constructor(
     private queryClient: QueryClient,
     private clearFeedback: () => void,
+    private storage: SessionStorage | null = browserStorage(),
   ) {}
 
   getSnapshot = (): AuthState => this.state;
@@ -61,7 +116,26 @@ export class AuthSession {
     this.listeners.forEach((listener) => listener());
   }
 
-  signOut = (error: string | null = null) => {
+  private readToken(): string | null {
+    try {
+      return this.storage?.getItem(SESSION_STORAGE_KEY) ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  private storeToken(token: string | null): boolean {
+    try {
+      if (!this.storage) return false;
+      if (token) this.storage.setItem(SESSION_STORAGE_KEY, token);
+      else this.storage.removeItem(SESSION_STORAGE_KEY);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private clearLocal(error: string | null = null, preserveStorage = false) {
     if (this.active) {
       this.active.controller.abort();
       this.active.credential.token = '';
@@ -70,6 +144,7 @@ export class AuthSession {
     void this.queryClient.cancelQueries();
     this.queryClient.clear();
     this.clearFeedback();
+    if (!preserveStorage) this.storeToken(null);
     this.publish({
       status: 'signed_out',
       user: null,
@@ -77,20 +152,57 @@ export class AuthSession {
       generation: this.state.generation + 1,
       request: unauthenticatedRequest,
     });
+  }
+
+  dispose = () => {
+    this.clearLocal(null, true);
+    this.publish({ ...this.state, status: 'restoring' });
   };
 
-  signIn = async (token: string, expectedAnalystId?: string): Promise<void> => {
-    this.signOut();
+  private revoke(token: string): Promise<unknown> {
+    return apiFetch(
+      '/api/auth/sign-out',
+      { token, signal: AbortSignal.timeout(10_000) },
+      {
+        method: 'POST',
+      },
+    );
+  }
+
+  signOut = async (): Promise<void> => {
+    const token = this.active?.credential.token || this.readToken();
+    this.clearLocal(
+      isSessionToken(token)
+        ? 'Signed out in this tab. Confirming server session revocation…'
+        : null,
+    );
+    const generation = this.state.generation;
+    if (!isSessionToken(token)) return;
+    let error: string | null = null;
+    try {
+      await this.revoke(token);
+    } catch {
+      error =
+        'Signed out in this tab, but server session revocation could not be confirmed. The session may remain active until it expires.';
+    }
+    if (this.state.generation === generation) this.publish({ ...this.state, error });
+  };
+
+  private start(token = ''): ActiveSession {
     const controller = new AbortController();
     const credential: ApiCredential = {
       token,
       signal: controller.signal,
-      ...(expectedAnalystId ? { expectedAnalystId } : {}),
     };
     const active = { credential, controller };
     this.active = active;
-    this.publish({ ...this.state, status: 'signing_in' });
+    return active;
+  }
 
+  private authenticate(active: ActiveSession, user: CurrentAnalyst) {
+    const { credential, controller } = active;
+    credential.expectedAnalystId = user.id;
+    const persisted = this.storeToken(credential.token);
     const request: ApiRequest = async <T>(path: string, init?: RequestInit) => {
       try {
         const result = await apiFetch<T>(path, credential, init);
@@ -103,29 +215,76 @@ export class AuthSession {
           error instanceof ApiRequestError &&
           error.status === 401
         ) {
-          this.signOut('Your access token has expired or been revoked. Please sign in again.');
+          this.clearLocal('Your session has expired or been revoked. Please sign in again.');
         }
         throw error;
       }
     };
+    this.publish({
+      ...this.state,
+      status: 'authenticated',
+      user,
+      request,
+      error: persisted
+        ? null
+        : 'Session storage is unavailable. Refreshing will require signing in again.',
+    });
+  }
 
+  restore = async (): Promise<void> => {
+    if (this.state.status !== 'restoring' || this.active) return;
+    const token = this.readToken();
+    if (!isSessionToken(token)) {
+      this.clearLocal();
+      return;
+    }
+    this.clearLocal(null, true);
+    const active = this.start(token);
+    this.publish({ ...this.state, status: 'restoring' });
     try {
-      const user = await request<unknown>('/api/me');
+      const user = await apiFetch<unknown>('/api/me', active.credential);
       if (this.active !== active) return;
       if (!isCurrentAnalyst(user))
         throw new ApiRequestError('Unable to verify the current identity.', 502);
-      if (expectedAnalystId && user.id !== expectedAnalystId)
-        throw new ApiRequestError('The token does not match the expected identity.', 403);
-      credential.expectedAnalystId = user.id;
-      this.publish({ ...this.state, status: 'authenticated', user, request });
+      this.authenticate(active, user);
     } catch (error) {
       if (this.active !== active) return;
-      this.signOut(
+      this.clearLocal(
         error instanceof ApiRequestError && error.status === 401
-          ? 'The access token is invalid, expired, or revoked. Ask an administrator for a token.'
-          : error instanceof ApiRequestError && error.status === 403
-            ? 'The token does not match the expected identity. Sign in with the correct token.'
-            : 'Unable to verify your identity. Check the API connection and try again.',
+          ? 'Your session has expired or been revoked. Please sign in again.'
+          : 'Unable to verify your identity. Check the API connection and sign in again.',
+      );
+    }
+  };
+
+  signIn = async (email: string, password: string): Promise<void> => {
+    const previousToken = this.active?.credential.token || this.readToken();
+    this.clearLocal();
+    const active = this.start();
+    this.publish({ ...this.state, status: 'signing_in' });
+    if (isSessionToken(previousToken)) void this.revoke(previousToken).catch(() => {});
+    try {
+      const response = await signInRequest(email.trim(), password, active.controller.signal);
+      const token = sessionToken(response);
+      if (this.active !== active || !isSignInResponse(response)) {
+        if (token) void this.revoke(token).catch(() => {});
+        if (this.active !== active) return;
+        throw new ApiRequestError('Unable to verify the current identity.', 502);
+      }
+      active.credential.token = response.session.token;
+      this.authenticate(active, response.analyst);
+    } catch (error) {
+      if (this.active !== active) return;
+      this.clearLocal(
+        error instanceof ApiRequestError && error.status === 401
+          ? 'Incorrect email or password.'
+          : error instanceof ApiRequestError && error.status === 400
+            ? 'Enter a valid email address and password.'
+            : error instanceof ApiRequestError && error.status === 429
+              ? 'Too many sign-in attempts. Wait a few minutes and try again.'
+              : error instanceof ApiRequestError && error.code === 'LOCAL_AUTH_DISABLED'
+                ? 'Local demo sign-in is disabled. For local development, start the API with npm run dev:server. This authentication mode is not available in production.'
+                : 'Unable to verify your identity. Check the API connection and try again.',
       );
     }
   };
